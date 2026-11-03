@@ -10,8 +10,6 @@ final class WebViewController: UIViewController {
     private let defaultServer = "http://10.219.62.32:49919/Login.aspx"
     private static let serverKey = "bizapp.serverURL"
 
-    private let brand = UIColor(red: 26 / 255, green: 109 / 255, blue: 217 / 255, alpha: 1)
-
     private var serverURL: String {
         get { UserDefaults.standard.string(forKey: WebViewController.serverKey) ?? defaultServer }
         set { UserDefaults.standard.set(newValue, forKey: WebViewController.serverKey) }
@@ -20,28 +18,83 @@ final class WebViewController: UIViewController {
     // MARK: - 视图
 
     private var webView: WKWebView!
-    private let progressBar = UIProgressView(progressViewStyle: .bar)
-    private let errorView = UIView()
-    private let errorLabel = UILabel()
+    private let progressTrack = UIView()
+    private let progressFill = UIView()
+    private var progressFillWidth: NSLayoutConstraint!
+    private let errorState = ErrorStateView()
+    private let splash = UIView()
+    private var splashStartedAt = Date()
+    private var splashRevealed = false
+
     private var progressObservation: NSKeyValueObservation?
     private var titleObservation: NSKeyValueObservation?
-
     private var lastDownloadURL: URL?
 
     // MARK: - 生命周期
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor(white: 0.96, alpha: 1)
+        view.backgroundColor = Theme.paper
+        setupNavigation()
         setupWebView()
-        setupChrome()
-        setupErrorView()
+        setupProgressLine()
+        setupErrorState()
+        setupSplash()
         load()
     }
 
-    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    override var preferredStatusBarStyle: UIStatusBarStyle { .darkContent }
 
-    // MARK: - 构建
+    // MARK: - 导航栏
+
+    private func setupNavigation() {
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = Theme.paper
+        appearance.shadowColor = .clear
+        appearance.titleTextAttributes = [
+            .foregroundColor: Theme.ink,
+            .font: Theme.body(15, medium: true)
+        ]
+        navigationItem.standardAppearance = appearance
+        navigationItem.scrollEdgeAppearance = appearance
+        navigationItem.compactAppearance = appearance
+        navigationItem.title = "业务系统"
+
+        let back = UIBarButtonItem(
+            image: UIImage(systemName: "chevron.left",
+                           withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)),
+            style: .plain, target: self, action: #selector(goBack))
+        back.tintColor = Theme.ink
+        back.isEnabled = false
+        navigationItem.leftBarButtonItem = back
+
+        let more = UIBarButtonItem(
+            image: UIImage(systemName: "ellipsis",
+                           withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)),
+            menu: buildMenu())
+        more.tintColor = Theme.ink
+        navigationItem.rightBarButtonItem = more
+    }
+
+    private func buildMenu() -> UIMenu {
+        let reload = UIAction(title: "刷新", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+            self?.reload()
+        }
+        let home = UIAction(title: "回到登录页", image: UIImage(systemName: "house")) { [weak self] _ in
+            self?.load()
+        }
+        let safari = UIAction(title: "在 Safari 中打开", image: UIImage(systemName: "safari")) { [weak self] _ in
+            guard let self = self, let url = URL(string: self.serverURL) else { return }
+            UIApplication.shared.open(url)
+        }
+        let server = UIAction(title: "更换服务器地址", image: UIImage(systemName: "gearshape")) { [weak self] _ in
+            self?.presentServerSettings()
+        }
+        return UIMenu(children: [reload, home, safari, UIMenu(options: .displayInline, children: [server])])
+    }
+
+    // MARK: - 视图构建
 
     private func setupWebView() {
         let config = WKWebViewConfiguration()
@@ -56,143 +109,124 @@ final class WebViewController: UIViewController {
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.keyboardDismissMode = .interactive
-        webView.scrollView.contentInsetAdjustmentBehavior = .automatic
         webView.isOpaque = true
         webView.backgroundColor = .white
 
         let refresh = UIRefreshControl()
+        refresh.tintColor = Theme.ink35
         refresh.addTarget(self, action: #selector(handleRefresh), for: .valueChanged)
         webView.scrollView.refreshControl = refresh
 
         view.addSubview(webView)
 
-        progressBar.translatesAutoresizingMaskIntoConstraints = false
-        progressBar.progressTintColor = brand
-        progressBar.trackTintColor = .clear
-        progressBar.progress = 0
-        progressBar.isHidden = true
-        view.addSubview(progressBar)
-
         NSLayoutConstraint.activate([
             webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            progressBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            progressBar.heightAnchor.constraint(equalToConstant: 2)
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
         progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
-            let progress = Float(webView.estimatedProgress)
-            self?.progressBar.setProgress(progress, animated: true)
-            self?.progressBar.isHidden = progress >= 1.0
+            self?.updateProgress(CGFloat(webView.estimatedProgress))
         }
-
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
-            self?.navigationItem.title = webView.title?.isEmpty == false ? webView.title : "业务系统"
+            guard let title = webView.title, !title.isEmpty else { return }
+            self?.navigationItem.title = title
         }
     }
 
-    private func setupChrome() {
-        navigationItem.title = "业务系统"
+    /// 贴顶的 2pt 细进度线，比系统进度条更克制
+    private func setupProgressLine() {
+        progressTrack.backgroundColor = Theme.line
+        progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        progressFill.backgroundColor = Theme.accent
+        progressFill.translatesAutoresizingMaskIntoConstraints = false
+        progressTrack.addSubview(progressFill)
+        view.addSubview(progressTrack)
 
-        let back = UIBarButtonItem(image: UIImage(systemName: "chevron.backward"),
-                                   style: .plain, target: self, action: #selector(goBack))
-        back.isEnabled = false
-        navigationItem.leftBarButtonItem = back
+        progressFillWidth = progressFill.widthAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            progressTrack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            progressTrack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            progressTrack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            progressTrack.heightAnchor.constraint(equalToConstant: 2),
 
-        let more = UIBarButtonItem(image: UIImage(systemName: "ellipsis.circle"),
-                                   style: .plain, target: self, action: #selector(showMore))
-        navigationItem.rightBarButtonItem = more
+            progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+            progressFillWidth
+        ])
+        progressTrack.isHidden = true
     }
 
-    private func setupErrorView() {
-        errorView.translatesAutoresizingMaskIntoConstraints = false
-        errorView.backgroundColor = UIColor(white: 0.96, alpha: 1)
-        errorView.isHidden = true
-        view.addSubview(errorView)
+    private func updateProgress(_ value: CGFloat) {
+        progressTrack.isHidden = value >= 1 || value <= 0
+        progressFillWidth.constant = view.bounds.width * min(max(value, 0), 1)
+    }
 
-        let icon = UILabel()
-        icon.text = "!"
-        icon.font = .boldSystemFont(ofSize: 34)
-        icon.textColor = brand
-        icon.textAlignment = .center
-        icon.backgroundColor = UIColor(red: 232 / 255, green: 240 / 255, blue: 252 / 255, alpha: 1)
-        icon.layer.cornerRadius = 32
-        icon.layer.borderWidth = 2
-        icon.layer.borderColor = brand.cgColor
-        icon.clipsToBounds = true
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.widthAnchor.constraint(equalToConstant: 64).isActive = true
-        icon.heightAnchor.constraint(equalToConstant: 64).isActive = true
-
-        let title = UILabel()
-        title.text = "无法连接服务器"
-        title.font = .boldSystemFont(ofSize: 17)
-        title.textColor = UIColor(white: 0.12, alpha: 1)
-        title.textAlignment = .center
-
-        errorLabel.numberOfLines = 0
-        errorLabel.textAlignment = .center
-        errorLabel.font = .systemFont(ofSize: 13)
-        errorLabel.textColor = UIColor(white: 0.42, alpha: 1)
-
-        let retry = makeButton(title: "重新加载", filled: true, action: #selector(handleRetry))
-        let change = makeButton(title: "修改服务器地址", filled: false, action: #selector(showServerDialog))
-
-        let iconRow = UIView()
-        iconRow.translatesAutoresizingMaskIntoConstraints = false
-        iconRow.addSubview(icon)
+    private func setupErrorState() {
+        errorState.translatesAutoresizingMaskIntoConstraints = false
+        errorState.isHidden = true
+        errorState.onRetry = { [weak self] in self?.reload() }
+        errorState.onSettings = { [weak self] in self?.presentServerSettings() }
+        view.addSubview(errorState)
         NSLayoutConstraint.activate([
-            icon.centerXAnchor.constraint(equalTo: iconRow.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: iconRow.centerYAnchor),
-            iconRow.heightAnchor.constraint(equalToConstant: 64)
+            errorState.topAnchor.constraint(equalTo: view.topAnchor),
+            errorState.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            errorState.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            errorState.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
+    }
 
-        let stack = UIStackView(arrangedSubviews: [iconRow, title, errorLabel, retry, change])
+    private func setupSplash() {
+        splash.backgroundColor = Theme.paper
+        splash.translatesAutoresizingMaskIntoConstraints = false
+
+        let mark = Theme.label("业务系统", font: Theme.display(21), color: Theme.ink)
+        mark.textAlignment = .center
+        let rule = UIView()
+        rule.backgroundColor = Theme.accent
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        rule.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        rule.heightAnchor.constraint(equalToConstant: 2).isActive = true
+
+        let caption = Theme.label("正在连接内网", font: Theme.micro(10), color: Theme.ink35)
+        caption.attributedText = Theme.tracked("CONNECTING", spacing: 1.6)
+        caption.textAlignment = .center
+
+        let stack = UIStackView(arrangedSubviews: [mark, rule, caption])
         stack.axis = .vertical
-        stack.alignment = .fill
-        stack.spacing = 14
-        stack.setCustomSpacing(24, after: errorLabel)
+        stack.alignment = .center
+        stack.spacing = 12
+        stack.setCustomSpacing(18, after: rule)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        errorView.addSubview(stack)
+        splash.addSubview(stack)
+        view.addSubview(splash)
 
         NSLayoutConstraint.activate([
-            errorView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            errorView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            errorView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            errorView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-            stack.centerYAnchor.constraint(equalTo: errorView.centerYAnchor, constant: -30),
-            stack.leadingAnchor.constraint(equalTo: errorView.leadingAnchor, constant: 32),
-            stack.trailingAnchor.constraint(equalTo: errorView.trailingAnchor, constant: -32),
-
-            retry.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            retry.heightAnchor.constraint(equalToConstant: 46),
-            change.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            change.heightAnchor.constraint(equalToConstant: 46)
+            splash.topAnchor.constraint(equalTo: view.topAnchor),
+            splash.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            splash.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            splash.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            stack.centerXAnchor.constraint(equalTo: splash.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: splash.centerYAnchor)
         ])
+        splashStartedAt = Date()
     }
 
-    private func makeButton(title: String, filled: Bool, action: Selector) -> UIButton {
-        let button = UIButton(type: .system)
-        button.setTitle(title, for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
-        button.layer.cornerRadius = 10
-        if filled {
-            button.backgroundColor = brand
-            button.setTitleColor(.white, for: .normal)
-        } else {
-            button.backgroundColor = .white
-            button.setTitleColor(brand, for: .normal)
-            button.layer.borderWidth = 1
-            button.layer.borderColor = brand.cgColor
+    private func revealSplash() {
+        guard !splashRevealed else { return }
+        splashRevealed = true
+        let elapsed = Date().timeIntervalSince(splashStartedAt)
+        let delay = max(0, 0.5 - elapsed)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self else { return }
+            UIView.animate(withDuration: 0.4, delay: 0, options: [.curveEaseOut], animations: {
+                self.splash.alpha = 0
+            }, completion: { _ in
+                self.splash.removeFromSuperview()
+            })
         }
-        button.addTarget(self, action: action, for: .touchUpInside)
-        return button
     }
 
     // MARK: - 加载
@@ -202,7 +236,8 @@ final class WebViewController: UIViewController {
         webView.load(URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 25))
     }
 
-    @objc private func handleRefresh() {
+    private func reload() {
+        hideError()
         if webView.url == nil {
             load()
         } else {
@@ -210,77 +245,54 @@ final class WebViewController: UIViewController {
         }
     }
 
-    @objc private func handleRetry() {
-        hideError()
-        webView.stopLoading()
-        if webView.url == nil {
-            load()
-        } else {
-            webView.reload()
-        }
+    @objc private func handleRefresh() {
+        reload()
     }
 
     @objc private func goBack() {
-        if webView.canGoBack {
-            webView.goBack()
-        }
+        if webView.canGoBack { webView.goBack() }
     }
 
-    @objc private func showMore() {
-        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        sheet.addAction(UIAlertAction(title: "刷新", style: .default) { [weak self] _ in
-            self?.handleRefresh()
-        })
-        sheet.addAction(UIAlertAction(title: "回到首页", style: .default) { [weak self] _ in
-            self?.load()
-        })
-        sheet.addAction(UIAlertAction(title: "在 Safari 中打开", style: .default) { [weak self] _ in
-            guard let self = self, let url = URL(string: self.serverURL) else { return }
-            UIApplication.shared.open(url)
-        })
-        sheet.addAction(UIAlertAction(title: "修改服务器地址", style: .default) { [weak self] _ in
-            self?.showServerDialog()
-        })
-        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
-        present(sheet, animated: true)
-    }
+    // MARK: - 设置页
 
-    @objc private func showServerDialog() {
-        let alert = UIAlertController(title: "服务器地址",
-                                      message: "填写登录页地址，例如 http://10.219.62.32:49919/Login.aspx",
-                                      preferredStyle: .alert)
-        alert.addTextField { field in
-            field.text = self.serverURL
-            field.keyboardType = .URL
-            field.autocapitalizationType = .none
-            field.autocorrectionType = .no
-        }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        alert.addAction(UIAlertAction(title: "保存并加载", style: .default) { [weak self, weak alert] _ in
-            guard let self = self, let text = alert?.textFields?.first?.text else { return }
-            var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.isEmpty { return }
-            if !value.lowercased().hasPrefix("http://") && !value.lowercased().hasPrefix("https://") {
-                value = "http://" + value
-            }
-            self.serverURL = value
+    private func presentServerSettings() {
+        let vc = ServerSettingsViewController(current: serverURL)
+        vc.onSave = { [weak self] url in
+            guard let self = self else { return }
+            self.serverURL = url
             self.hideError()
             self.load()
-        })
-        present(alert, animated: true)
+        }
+        let nav = UINavigationController(rootViewController: vc)
+        nav.modalPresentationStyle = .pageSheet
+        if let sheet = nav.sheetPresentationController {
+            sheet.prefersGrabberVisible = true
+            sheet.cornerRadius = 18
+        }
+        present(nav, animated: true)
     }
 
     // MARK: - 状态
 
-    private func showError(_ detail: String) {
-        progressBar.isHidden = true
-        errorLabel.text = "\(detail)\n\n服务器：\(serverURL)"
-        errorView.isHidden = false
+    private func showError(_ message: String) {
+        progressTrack.isHidden = true
+        errorState.configure(message: message, server: serverURL)
+        revealSplash()
         webView.scrollView.refreshControl?.endRefreshing()
+        guard errorState.isHidden else { return }
+        errorState.alpha = 0
+        errorState.isHidden = false
+        UIView.animate(withDuration: 0.28) { self.errorState.alpha = 1 }
     }
 
     private func hideError() {
-        errorView.isHidden = true
+        guard !errorState.isHidden else { return }
+        UIView.animate(withDuration: 0.2, animations: {
+            self.errorState.alpha = 0
+        }, completion: { _ in
+            self.errorState.isHidden = true
+            self.errorState.alpha = 1
+        })
     }
 
     private func updateBackButton() {
@@ -296,18 +308,17 @@ final class WebViewController: UIViewController {
     }
 
     private func message(for error: Error) -> String {
-        let code = (error as NSError).code
-        switch code {
+        switch (error as NSError).code {
         case NSURLErrorCannotFindHost:
-            return "找不到服务器地址，请确认已连接公司内网。"
+            return "找不到这个服务器地址。检查一下是否还在公司网络里，或者地址是不是写错了。"
         case NSURLErrorCannotConnectToHost:
-            return "连接服务器失败，服务可能未启动或端口不可达。"
+            return "服务器没有响应。服务可能没启动，或者端口不通。"
         case NSURLErrorTimedOut:
-            return "连接超时，网络较慢或服务器无响应。"
+            return "连接超时。网络较慢，或服务器暂时无响应。"
         case NSURLErrorNotConnectedToInternet:
-            return "当前设备未连接网络，请先连接内网 Wi-Fi。"
+            return "这台设备现在没有网络，先连上内网 Wi-Fi 再试。"
         default:
-            return "加载失败：\((error as NSError).localizedDescription)"
+            return (error as NSError).localizedDescription
         }
     }
 }
@@ -362,14 +373,14 @@ extension WebViewController: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        progressBar.isHidden = false
         hideError()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        progressBar.isHidden = true
+        progressTrack.isHidden = true
         updateBackButton()
         webView.scrollView.refreshControl?.endRefreshing()
+        revealSplash()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
