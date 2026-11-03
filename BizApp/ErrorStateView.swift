@@ -61,7 +61,7 @@ final class ErrorStateView: UIView {
         ])
 
         primary.setTitle("重新加载", for: .normal)
-        primary.setTitleColor(Theme.surface, for: .normal)
+        primary.setTitleColor(Theme.onInk, for: .normal)
         primary.titleLabel?.font = Theme.body(15, medium: true)
         primary.backgroundColor = Theme.ink
         primary.layer.cornerRadius = Theme.radius

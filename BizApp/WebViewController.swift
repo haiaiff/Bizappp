@@ -15,6 +15,17 @@ final class WebViewController: UIViewController {
         set { UserDefaults.standard.set(newValue, forKey: WebViewController.serverKey) }
     }
 
+    private static let webDarkKey = "bizapp.webDark"
+
+    /// 网页内容跟随深色（对白底老系统注入反色样式）
+    private var webDark: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: WebViewController.webDarkKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: WebViewController.webDarkKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: WebViewController.webDarkKey) }
+    }
+
     // MARK: - 视图
 
     private var webView: WKWebView!
@@ -43,7 +54,16 @@ final class WebViewController: UIViewController {
         load()
     }
 
-    override var preferredStatusBarStyle: UIStatusBarStyle { .darkContent }
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        traitCollection.userInterfaceStyle == .dark ? .lightContent : .darkContent
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        if previous?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+            setNeedsStatusBarAppearanceUpdate()
+        }
+    }
 
     // MARK: - 导航栏
 
@@ -91,7 +111,34 @@ final class WebViewController: UIViewController {
         let server = UIAction(title: "更换服务器地址", image: UIImage(systemName: "gearshape")) { [weak self] _ in
             self?.presentServerSettings()
         }
-        return UIMenu(children: [reload, home, safari, UIMenu(options: .displayInline, children: [server])])
+
+        // 网页深色：老系统本身没有 dark 样式，用注入样式把它压到深色
+        let webDarkAction = UIAction(
+            title: "网页深色",
+            image: UIImage(systemName: "circle.lefthalf.filled"),
+            state: webDark ? .on : .off
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.webDark = !self.webDark
+            self.applyWebDark()
+            self.navigationItem.rightBarButtonItem?.menu = self.buildMenu()
+            self.reload()
+        }
+
+        let appearanceActions = Theme.Appearance.allCases.map { value in
+            UIAction(title: value.title,
+                     state: Theme.appearance == value ? .on : .off) { _ in
+                // 等菜单收起再重建根控制器，避免在菜单存续期间换掉它的宿主
+                DispatchQueue.main.async { Theme.setAppearance(value) }
+            }
+        }
+        let appearance = UIMenu(title: "外观", image: UIImage(systemName: "moon"), children: appearanceActions)
+
+        return UIMenu(children: [
+            reload, home, safari,
+            UIMenu(options: .displayInline, children: [webDarkAction, appearance]),
+            UIMenu(options: .displayInline, children: [server])
+        ])
     }
 
     // MARK: - 视图构建
@@ -103,6 +150,8 @@ final class WebViewController: UIViewController {
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.applicationNameForUserAgent = "BizApp/1.0"
 
+        applyWebDark(to: config.userContentController)
+
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.navigationDelegate = self
@@ -110,7 +159,10 @@ final class WebViewController: UIViewController {
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.keyboardDismissMode = .interactive
         webView.isOpaque = true
-        webView.backgroundColor = .white
+        webView.backgroundColor = Theme.paper
+        webView.scrollView.backgroundColor = Theme.paper
+        // 安卓式"白底闪一下"在暗色下尤其刺眼，滚动回弹区也用纸色
+        webView.underPageBackgroundColor = Theme.paper
 
         let refresh = UIRefreshControl()
         refresh.tintColor = Theme.ink35
@@ -133,6 +185,18 @@ final class WebViewController: UIViewController {
             guard let title = webView.title, !title.isEmpty else { return }
             self?.navigationItem.title = title
         }
+    }
+
+    // MARK: - 网页深色
+
+    /// 把反色样式挂到 WebView 配置上；开关变化后需要 reload 才生效
+    private func applyWebDark(to controller: WKUserContentController? = nil) {
+        let cc = controller ?? webView.configuration.userContentController
+        cc.removeAllUserScripts()
+        guard webDark else { return }
+        cc.addUserScript(WKUserScript(source: WebDark.script,
+                                      injectionTime: .atDocumentStart,
+                                      forMainFrameOnly: true))
     }
 
     /// 贴顶的 2pt 细进度线，比系统进度条更克制
@@ -451,4 +515,48 @@ extension WebViewController: WKDownloadDelegate {
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         toast("下载失败：\(error.localizedDescription)")
     }
+}
+
+// MARK: - 网页反色
+
+/// 老系统没有 dark 样式，这里注入一层“反色 + 色相回正”，把白底页面压到石墨底。
+/// 图片按尺寸判断：大图（logo / 照片）反两次保留原色，小图（图标 / 雪碧图）只反一次变成浅色。
+private enum WebDark {
+
+    static let script = #"""
+    (function () {
+      if (window.__bizappDark) { return; }
+      window.__bizappDark = true;
+
+      var CSS = [
+        ':root{color-scheme:dark}',
+        'html{background:#f0ede9 !important;filter:invert(1) hue-rotate(180deg);-webkit-font-smoothing:antialiased}',
+        'body{background:transparent !important}',
+        'img.__bizapp_keep,video,canvas,object,embed{filter:invert(1) hue-rotate(180deg) !important}'
+      ].join('');
+
+      function paint() {
+        var s = document.getElementById('__bizapp_dark__');
+        if (!s) { s = document.createElement('style'); s.id = '__bizapp_dark__'; }
+        s.textContent = CSS;
+        (document.head || document.documentElement).appendChild(s);
+      }
+
+      function keepColor() {
+        var imgs = document.images, i, im;
+        for (i = 0; i < imgs.length; i++) {
+          im = imgs[i];
+          if (im.naturalWidth >= 64 || im.naturalHeight >= 64) {
+            im.classList.add('__bizapp_keep');
+          } else {
+            im.classList.remove('__bizapp_keep');
+          }
+        }
+      }
+
+      paint();
+      document.addEventListener('DOMContentLoaded', function () { paint(); keepColor(); });
+      window.addEventListener('load', function () { keepColor(); setTimeout(keepColor, 900); });
+    })();
+    """#
 }

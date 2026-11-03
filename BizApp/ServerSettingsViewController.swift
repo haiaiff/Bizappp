@@ -20,7 +20,7 @@ final class ServerSettingsViewController: UIViewController, UITextFieldDelegate 
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = Theme.paper
+        view.backgroundColor = Theme.sheet
         setupNavigation()
         buildContent()
         observeKeyboard()
@@ -34,7 +34,7 @@ final class ServerSettingsViewController: UIViewController, UITextFieldDelegate 
     private func setupNavigation() {
         let appearance = UINavigationBarAppearance()
         appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = Theme.paper
+        appearance.backgroundColor = Theme.sheet
         appearance.shadowColor = .clear
         appearance.titleTextAttributes = [
             .foregroundColor: Theme.ink,
@@ -77,6 +77,7 @@ final class ServerSettingsViewController: UIViewController, UITextFieldDelegate 
         textField.textColor = Theme.ink
         textField.tintColor = Theme.accent
         textField.keyboardType = .URL
+        textField.keyboardAppearance = Theme.appearance == .light ? .light : .dark
         textField.autocapitalizationType = .none
         textField.autocorrectionType = .no
         textField.spellCheckingType = .no
@@ -89,7 +90,7 @@ final class ServerSettingsViewController: UIViewController, UITextFieldDelegate 
                                   font: Theme.mono(11), color: Theme.ink35)
 
         saveButton.setTitle("保存并重新加载", for: .normal)
-        saveButton.setTitleColor(Theme.surface, for: .normal)
+        saveButton.setTitleColor(Theme.onInk, for: .normal)
         saveButton.titleLabel?.font = Theme.body(15, medium: true)
         saveButton.backgroundColor = Theme.ink
         saveButton.layer.cornerRadius = Theme.radius
@@ -157,7 +158,7 @@ final class ServerSettingsViewController: UIViewController, UITextFieldDelegate 
         anim.values = [-8, 8, -5, 5, 0]
         anim.duration = 0.32
         fieldBox.layer.add(anim, forKey: "shake")
-        fieldBox.layer.borderColor = UIColor(rgb: 0xC0392B).cgColor
+        fieldBox.layer.borderColor = Theme.danger.cgColor
     }
 
     func textFieldDidBeginEditing(_ textField: UITextField) {

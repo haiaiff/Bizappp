@@ -1,17 +1,36 @@
 import UIKit
 
 /// 设计令牌：颜色 / 字体 / 间距统一在这里，避免散落
+///
+/// 暗色是主设计（石墨底 + 单一信号蓝），浅色是同一套令牌的反向映射。
+/// 两套值都写在 token 里，视图层只认语义名，不出现任何字面色值。
 enum Theme {
 
-    // MARK: 色彩（墨 + 纸 + 单一强调色）
-    static let ink        = UIColor(rgb: 0x101318)
-    static let ink60      = UIColor(rgb: 0x5A6270)
-    static let ink35      = UIColor(rgb: 0x9AA1AC)
-    static let paper      = UIColor(rgb: 0xF3F3F1)
-    static let surface    = UIColor(rgb: 0xFFFFFF)
-    static let line       = UIColor(rgb: 0xE2E2DD)
-    static let accent     = UIColor(rgb: 0x1257C7)
-    static let accentSoft = UIColor(rgb: 0xE9EFFB)
+    // MARK: 色彩（暗：石墨 / 浅：纸）
+
+    /// 页面底色
+    static let paper    = dyn(dark: 0x0F1216, light: 0xF3F3F1)
+    /// 弹层底色（比页面略抬一级）
+    static let sheet    = dyn(dark: 0x12161C, light: 0xF7F7F5)
+    /// 卡片 / 输入框
+    static let surface  = dyn(dark: 0x171C23, light: 0xFFFFFF)
+    /// 1px 硬边分割线
+    static let line     = dyn(dark: 0x252B34, light: 0xE2E2DD)
+
+    /// 主文字
+    static let ink      = dyn(dark: 0xE9EBEE, light: 0x101318)
+    /// 次级文字
+    static let ink60    = dyn(dark: 0x99A2AF, light: 0x5A6270)
+    /// 三级文字（提示 / 脚注），仍保持 4.5:1 以上
+    static let ink35    = dyn(dark: 0x79828F, light: 0x949BA5)
+    /// 主按钮上的文字（与 ink 互为反色）
+    static let onInk    = dyn(dark: 0x0F1216, light: 0xF7F7F5)
+
+    /// 信号色：只用于进度、眉标、链接
+    static let accent   = dyn(dark: 0x5B9BF5, light: 0x1257C7)
+    static let accentSoft = dyn(dark: 0x16233A, light: 0xE9EFFB)
+    /// 出错提示
+    static let danger   = dyn(dark: 0xE0705F, light: 0xC0392B)
 
     // MARK: 间距
     static let gutter: CGFloat = 24
@@ -53,6 +72,62 @@ enum Theme {
     static func tracked(_ text: String, spacing: CGFloat) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [.kern: spacing])
     }
+}
+
+// MARK: - 明暗
+
+extension Theme {
+
+    enum Appearance: String, CaseIterable {
+        case dark, light, system
+
+        var title: String {
+            switch self {
+            case .dark:   return "深色"
+            case .light:  return "浅色"
+            case .system: return "跟随系统"
+            }
+        }
+
+        var style: UIUserInterfaceStyle {
+            switch self {
+            case .dark:   return .dark
+            case .light:  return .light
+            case .system: return .unspecified
+            }
+        }
+    }
+
+    private static let appearanceKey = "bizapp.appearance"
+
+    /// 默认深色：这是为暗环境 / 长时间盯屏设计的主形态
+    static var appearance: Appearance {
+        get { Appearance(rawValue: UserDefaults.standard.string(forKey: appearanceKey) ?? "") ?? .dark }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: appearanceKey) }
+    }
+
+    /// 外观变更后的回调，由 AppDelegate 挂载（重建根控制器，让动态色整体生效）
+    static var onChange: (() -> Void)?
+
+    static func setAppearance(_ value: Appearance) {
+        guard value != appearance else { return }
+        appearance = value
+        onChange?()
+    }
+
+    /// 把当前外观套到所有窗口上
+    static func apply(to window: UIWindow?) {
+        window?.overrideUserInterfaceStyle = appearance.style
+        window?.backgroundColor = paper
+    }
+}
+
+// MARK: - 基础件
+
+private func dyn(dark: UInt32, light: UInt32) -> UIColor {
+    UIColor(dynamicProvider: { traits in
+        traits.userInterfaceStyle == .dark ? UIColor(rgb: dark) : UIColor(rgb: light)
+    })
 }
 
 extension UIColor {
