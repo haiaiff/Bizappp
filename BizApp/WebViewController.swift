@@ -71,7 +71,7 @@ final class WebViewController: UIViewController {
         let appearance = UINavigationBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = Theme.paper
-        appearance.shadowColor = .clear
+        appearance.shadowColor = Theme.line   // 1px 发丝线：网页与外壳同色后，靠这条线交代边界
         appearance.titleTextAttributes = [
             .foregroundColor: Theme.ink,
             .font: Theme.body(15, medium: true)
@@ -530,8 +530,7 @@ private enum WebDark {
 
       var CSS = [
         ':root{color-scheme:dark}',
-        'html{background:#f0ede9 !important;filter:invert(1) hue-rotate(180deg);-webkit-font-smoothing:antialiased}',
-        'body{background:transparent !important}',
+        'html{background:#ffffff !important;filter:invert(.94) hue-rotate(180deg);-webkit-font-smoothing:antialiased}',
         'img.__bizapp_keep,video,canvas,object,embed{filter:invert(1) hue-rotate(180deg) !important}'
       ].join('');
 

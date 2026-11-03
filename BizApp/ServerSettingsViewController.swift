@@ -35,7 +35,7 @@ final class ServerSettingsViewController: UIViewController, UITextFieldDelegate 
         let appearance = UINavigationBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = Theme.sheet
-        appearance.shadowColor = .clear
+        appearance.shadowColor = Theme.line   // 1px 发丝线：网页与外壳同色后，靠这条线交代边界
         appearance.titleTextAttributes = [
             .foregroundColor: Theme.ink,
             .font: Theme.body(15, medium: true)
