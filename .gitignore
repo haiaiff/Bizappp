@@ -1,0 +1,7 @@
+BizApp-iOS.zip
+*.mobileconfig
+AppIcon-512.png
+build/
+Payload/
+*.ipa
+.DS_Store
