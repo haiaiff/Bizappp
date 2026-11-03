@@ -16,6 +16,7 @@ final class WebViewController: UIViewController {
     }
 
     private static let webDarkKey = "bizapp.webDark"
+    private static let centerPageKey = "bizapp.centerPage"
 
     /// 网页内容跟随深色（对白底老系统注入反色样式）
     private var webDark: Bool {
@@ -24,6 +25,15 @@ final class WebViewController: UIViewController {
             return UserDefaults.standard.bool(forKey: WebViewController.webDarkKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: WebViewController.webDarkKey) }
+    }
+
+    /// 内容明显短于屏幕时垂直居中（登录页这类"上面一小块、下面一大片空"的页面）
+    private var centerPage: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: WebViewController.centerPageKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: WebViewController.centerPageKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: WebViewController.centerPageKey) }
     }
 
     // MARK: - 视图
@@ -120,7 +130,20 @@ final class WebViewController: UIViewController {
         ) { [weak self] _ in
             guard let self = self else { return }
             self.webDark = !self.webDark
-            self.applyWebDark()
+            self.applyInjection()
+            self.navigationItem.rightBarButtonItem?.menu = self.buildMenu()
+            self.reload()
+        }
+
+        // 登录页居中：网页把登录框排在页面上部，下面留一大片空，居中后视觉才平衡
+        let centerAction = UIAction(
+            title: "登录页居中",
+            image: UIImage(systemName: "rectangle.center.inset.filled"),
+            state: centerPage ? .on : .off
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.centerPage = !self.centerPage
+            self.applyInjection()
             self.navigationItem.rightBarButtonItem?.menu = self.buildMenu()
             self.reload()
         }
@@ -136,7 +159,7 @@ final class WebViewController: UIViewController {
 
         return UIMenu(children: [
             reload, home, safari,
-            UIMenu(options: .displayInline, children: [webDarkAction, appearance]),
+            UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance]),
             UIMenu(options: .displayInline, children: [server])
         ])
     }
@@ -150,7 +173,7 @@ final class WebViewController: UIViewController {
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.applicationNameForUserAgent = "BizApp/1.0"
 
-        applyWebDark(to: config.userContentController)
+        applyInjection(to: config.userContentController)
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -189,12 +212,12 @@ final class WebViewController: UIViewController {
 
     // MARK: - 网页深色
 
-    /// 把反色样式挂到 WebView 配置上；开关变化后需要 reload 才生效
-    private func applyWebDark(to controller: WKUserContentController? = nil) {
+    /// 把注入样式挂到 WebView 配置上；开关变化后需要 reload 才生效
+    private func applyInjection(to controller: WKUserContentController? = nil) {
         let cc = controller ?? webView.configuration.userContentController
         cc.removeAllUserScripts()
-        guard webDark else { return }
-        cc.addUserScript(WKUserScript(source: WebDark.script,
+        guard webDark || centerPage else { return }
+        cc.addUserScript(WKUserScript(source: WebInjection.script(dark: webDark, center: centerPage),
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: true))
     }
@@ -517,45 +540,107 @@ extension WebViewController: WKDownloadDelegate {
     }
 }
 
-// MARK: - 网页反色
+// MARK: - 网页注入
 
-/// 老系统没有 dark 样式，这里注入一层“反色 + 色相回正”，把白底页面压到石墨底。
-/// 图片按尺寸判断：大图（logo / 照片）反两次保留原色，小图（图标 / 雪碧图）只反一次变成浅色。
-private enum WebDark {
+/// 老系统没有 dark 样式，也没有为手机排过版，这里注入两层样式：
+/// 1) 「反色 + 色相回正」把白底页面压到石墨底，大图二次反色保留原色；
+/// 2) 内容短于屏幕时垂直居中，把登录页下方那片空白分到上下两侧。
+private enum WebInjection {
 
-    static let script = #"""
-    (function () {
-      if (window.__bizappDark) { return; }
-      window.__bizappDark = true;
+    static func script(dark: Bool, center: Bool) -> String {
+        let flags = "{\"dark\": \(dark), \"center\": \(center)}"
+        return #"""
+        (function () {
+          if (window.__bizappInjected) { return; }
+          window.__bizappInjected = true;
 
-      var CSS = [
-        ':root{color-scheme:dark}',
-        'html{background:#ffffff !important;filter:invert(.94) hue-rotate(180deg);-webkit-font-smoothing:antialiased}',
-        'img.__bizapp_keep,video,canvas,object,embed{filter:invert(1) hue-rotate(180deg) !important}'
-      ].join('');
+          var CFG = \#(flags);
 
-      function paint() {
-        var s = document.getElementById('__bizapp_dark__');
-        if (!s) { s = document.createElement('style'); s.id = '__bizapp_dark__'; }
-        s.textContent = CSS;
-        (document.head || document.documentElement).appendChild(s);
-      }
+          var DARK_CSS = [
+            ':root{color-scheme:dark}',
+            'html{background:#ffffff !important;filter:invert(.94) hue-rotate(180deg);-webkit-font-smoothing:antialiased}',
+            'img.__bizapp_keep,video,canvas,object,embed{filter:invert(1) hue-rotate(180deg) !important}'
+          ].join('');
 
-      function keepColor() {
-        var imgs = document.images, i, im;
-        for (i = 0; i < imgs.length; i++) {
-          im = imgs[i];
-          if (im.naturalWidth >= 64 || im.naturalHeight >= 64) {
-            im.classList.add('__bizapp_keep');
-          } else {
-            im.classList.remove('__bizapp_keep');
+          var CENTER_CSS = [
+            'html.__bz_center,html.__bz_center body{height:100% !important;min-height:100% !important}',
+            'html.__bz_center body{display:flex !important;flex-direction:column !important;justify-content:center !important}'
+          ].join('');
+
+          function styleSheet() {
+            var s = document.getElementById('__bizapp_style__');
+            if (!s) {
+              s = document.createElement('style');
+              s.id = '__bizapp_style__';
+            }
+            var css = (CFG.dark ? DARK_CSS : '') + (CFG.center ? CENTER_CSS : '');
+            if (s.textContent !== css) { s.textContent = css; }
+            (document.head || document.documentElement).appendChild(s);
           }
-        }
-      }
 
-      paint();
-      document.addEventListener('DOMContentLoaded', function () { paint(); keepColor(); });
-      window.addEventListener('load', function () { keepColor(); setTimeout(keepColor, 900); });
-    })();
-    """#
+          function keepColor() {
+            var imgs = document.images, i, im;
+            for (i = 0; i < imgs.length; i++) {
+              im = imgs[i];
+              if (im.naturalWidth >= 64 || im.naturalHeight >= 64) {
+                im.classList.add('__bizapp_keep');
+              } else {
+                im.classList.remove('__bizapp_keep');
+              }
+            }
+          }
+
+          // 只量内容本身的高度：body 自身可能被拉满屏，量它会永远"等于视口"
+          function contentHeight() {
+            var body = document.body;
+            if (!body) { return 0; }
+            var box = body.getBoundingClientRect();
+            var top = box.top, bottom = top, seen = false;
+            for (var i = 0; i < body.children.length; i++) {
+              var r = body.children[i].getBoundingClientRect();
+              if (r.height < 1 && r.width < 1) { continue; }
+              top = seen ? Math.min(top, r.top) : r.top;
+              bottom = seen ? Math.max(bottom, r.bottom) : r.bottom;
+              seen = true;
+            }
+            return seen ? (bottom - top) : body.scrollHeight;
+          }
+
+          function fitCenter() {
+            if (!CFG.center || !document.body) { return; }
+            var html = document.documentElement;
+            var vv = window.visualViewport;
+            var viewport = vv ? vv.height : window.innerHeight;
+            var content = contentHeight();
+
+            // 0.86 是留白阈值：短于八成六屏才居中；长页面（列表、表单）原样保留，
+            // 否则 flex 居中会把超出部分顶到屏幕外，滚都滚不到。
+            if (content > 40 && content < viewport * 0.86) {
+              html.classList.add('__bz_center');
+            } else {
+              html.classList.remove('__bz_center');
+            }
+          }
+
+          function run() {
+            styleSheet();
+            fitCenter();
+            keepColor();
+          }
+
+          run();
+          document.addEventListener('DOMContentLoaded', run);
+          window.addEventListener('load', function () {
+            run();
+            setTimeout(run, 300);
+            setTimeout(run, 1000);
+          });
+          // 键盘弹出会压缩视口，这时应当解除居中，让表单能正常滚动
+          if (window.visualViewport) {
+            window.visualViewport.addEventListener('resize', fitCenter);
+          }
+          window.addEventListener('resize', fitCenter);
+        })();
+        """#
+    }
 }
