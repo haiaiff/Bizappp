@@ -26,7 +26,6 @@ final class WebViewController: UIViewController {
     private var progressObservation: NSKeyValueObservation?
     private var titleObservation: NSKeyValueObservation?
 
-    private var fileCompletion: (([URL]?) -> Void)?
     private var lastDownloadURL: URL?
 
     // MARK: - 生命周期
@@ -414,32 +413,6 @@ extension WebViewController: WKUIDelegate {
             webView.load(navigationAction.request)
         }
         return nil
-    }
-
-    func webView(_ webView: WKWebView,
-                 runOpenPanelWith parameters: WKOpenPanelParameters,
-                 initiatedByFrame frame: WKFrameInfo,
-                 completionHandler: @escaping ([URL]?) -> Void) {
-        fileCompletion = completionHandler
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
-        picker.allowsMultipleSelection = parameters.allowsMultipleSelection
-        picker.delegate = self
-        present(picker, animated: true)
-    }
-}
-
-// MARK: - 文件选择
-
-extension WebViewController: UIDocumentPickerDelegate {
-
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        fileCompletion?(urls)
-        fileCompletion = nil
-    }
-
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        fileCompletion?(nil)
-        fileCompletion = nil
     }
 }
 
