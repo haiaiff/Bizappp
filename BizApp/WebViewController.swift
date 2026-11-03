@@ -267,7 +267,7 @@ final class WebViewController: UIViewController {
         nav.modalPresentationStyle = .pageSheet
         if let sheet = nav.sheetPresentationController {
             sheet.prefersGrabberVisible = true
-            sheet.cornerRadius = 18
+            sheet.preferredCornerRadius = 18
         }
         present(nav, animated: true)
     }
