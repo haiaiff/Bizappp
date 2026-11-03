@@ -1,5 +1,13 @@
 # iOS 交付说明
 
+## ✅ 已构建好的安装包
+
+`业务系统-unsigned.ipa`（122 KB，arm64，未签名）——由 GitHub Actions 的 macOS 机器实际编译产出，可直接拿去用你的企业证书重签。
+
+- 包名 `com.bizapp.web`，最低 iOS 15.0，iPhone only
+- 未签名（无 `_CodeSignature`），签名工具不会再报"已签名"冲突
+- 构建记录：https://github.com/haiaiff/Bizappp/actions
+
 ## 0. 先说清楚：为什么我这边出不了 ipa
 
 ipa 里的可执行文件是 **arm64 Mach-O**，只能用 Apple 的 macOS 工具链（Xcode / iPhoneOS SDK）产出。
@@ -119,7 +127,7 @@ zip -qry BizApp-signed.ipa -C tmp Payload
 | 场景 | 说明 |
 | --- | --- |
 | 登录态 | 持久化 Cookie（`WKWebsiteDataStore.default()`），杀进程重进不用重新登录 |
-| 附件上传 | 接管 `input type=file`，调起系统「文件」选择器，支持多选 |
+| 附件上传 | iOS 上 `<input type=file>` 由 WebKit 原生处理（照片 / 拍照 / 文件），无需额外代码 |
 | 文件下载 | `WKDownload`，下完弹分享面板，可存「文件」或转发 |
 | 返回 | 左缘右滑返回 + 导航栏返回箭头 |
 | `target=_blank` | 强制当前页打开，不会点了没反应 |
@@ -143,4 +151,4 @@ zip -qry BizApp-signed.ipa -C tmp Payload
 
 1. **WKWebView 不能忽略自签 HTTPS 证书**（与 Android WebView 不同）。你现在是 `http://`，无影响；将来若换 https + 自签证书会白屏。
 2. 套壳 App 上不了 App Store（4.2 条款），内部用没问题。
-3. 我这边只做了 Swift 语法解析校验（Swift 5.9 编译通过 `-parse`）和 `.xcodeproj` 结构校验，**没有在 Xcode 里实际编译过**。首次编译若报错，把错误贴给我即可。
+3. 已在 GitHub Actions 的 macOS 14 + Xcode 上真实编译通过（产物见文首），不是纸面工程。
