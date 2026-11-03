@@ -1,0 +1,35 @@
+name: Build unsigned IPA
+
+# 推代码或手动点 Run 都会自动出包
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    # GitHub 免费提供的 macOS 机器，自带 Xcode
+    runs-on: macos-14
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 查看构建环境
+        run: |
+          xcodebuild -version
+          xcode-select -p
+
+      - name: 编译并打包 ipa（不签名）
+        run: |
+          chmod +x build-ipa.sh
+          ./build-ipa.sh
+
+      - name: 上传 ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: BizApp-unsigned-ipa
+          path: BizApp-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
