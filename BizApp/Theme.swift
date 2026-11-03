@@ -2,33 +2,34 @@ import UIKit
 
 /// 设计令牌：颜色 / 字体 / 间距统一在这里，避免散落
 ///
-/// 暗色是主设计（石墨底 + 单一信号蓝），浅色是同一套令牌的反向映射。
+/// 暗色是主设计（中性石墨底 + 单一信号蓝），浅色是同一套令牌的反向映射。
+/// 暗色的中性值刻意不带色相：网页内容反色后必然是中性灰，外壳只要偏一点蓝就会露出接缝。
 /// 两套值都写在 token 里，视图层只认语义名，不出现任何字面色值。
 enum Theme {
 
     // MARK: 色彩（暗：石墨 / 浅：纸）
 
     /// 页面底色
-    static let paper    = dyn(dark: 0x0F1216, light: 0xF3F3F1)
+    static let paper    = dyn(dark: 0x0F0F0F, light: 0xF3F3F1)
     /// 弹层底色（比页面略抬一级）
-    static let sheet    = dyn(dark: 0x12161C, light: 0xF7F7F5)
+    static let sheet    = dyn(dark: 0x151515, light: 0xF7F7F5)
     /// 卡片 / 输入框
-    static let surface  = dyn(dark: 0x171C23, light: 0xFFFFFF)
+    static let surface  = dyn(dark: 0x1B1B1B, light: 0xFFFFFF)
     /// 1px 硬边分割线
-    static let line     = dyn(dark: 0x252B34, light: 0xE2E2DD)
+    static let line     = dyn(dark: 0x2B2B2B, light: 0xE2E2DD)
 
     /// 主文字
-    static let ink      = dyn(dark: 0xE9EBEE, light: 0x101318)
+    static let ink      = dyn(dark: 0xECECEC, light: 0x101318)
     /// 次级文字
-    static let ink60    = dyn(dark: 0x99A2AF, light: 0x5A6270)
+    static let ink60    = dyn(dark: 0x9C9C9C, light: 0x5A6270)
     /// 三级文字（提示 / 脚注），仍保持 4.5:1 以上
-    static let ink35    = dyn(dark: 0x79828F, light: 0x949BA5)
+    static let ink35    = dyn(dark: 0x7D7D7D, light: 0x949BA5)
     /// 主按钮上的文字（与 ink 互为反色）
-    static let onInk    = dyn(dark: 0x0F1216, light: 0xF7F7F5)
+    static let onInk    = dyn(dark: 0x0F0F0F, light: 0xF7F7F5)
 
     /// 信号色：只用于进度、眉标、链接
     static let accent   = dyn(dark: 0x5B9BF5, light: 0x1257C7)
-    static let accentSoft = dyn(dark: 0x16233A, light: 0xE9EFFB)
+    static let accentSoft = dyn(dark: 0x161C26, light: 0xE9EFFB)
     /// 出错提示
     static let danger   = dyn(dark: 0xE0705F, light: 0xC0392B)
 
