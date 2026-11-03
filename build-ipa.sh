@@ -2,6 +2,7 @@
 # 在 macOS 上生成未签名 ipa（不依赖 Xcode 图形界面，也不用配证书）
 # 用法：双击或在终端执行 ./build-ipa.sh
 set -e
+set -o pipefail   # 让 xcodebuild 的失败能中断脚本（否则管道会吞掉退出码）
 
 cd "$(dirname "$0")"
 APP_NAME="BizApp"
@@ -35,6 +36,11 @@ xcodebuild \
 APP_PATH="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
 if [ ! -d "$APP_PATH" ]; then
   echo "❌ 编译失败，未找到 ${APP_PATH}"
+  exit 1
+fi
+# 注意：编译失败时 .app 目录仍会被创建（只有资源、没有可执行文件），必须显式检查
+if [ ! -f "$APP_PATH/${APP_NAME}" ]; then
+  echo "❌ 产物里没有可执行文件，编译实际失败了，请看上面的 xcodebuild 输出"
   exit 1
 fi
 
