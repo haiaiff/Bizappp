@@ -89,7 +89,7 @@ final class WebViewController: UIViewController {
         navigationItem.standardAppearance = appearance
         navigationItem.scrollEdgeAppearance = appearance
         navigationItem.compactAppearance = appearance
-        navigationItem.title = "业务系统"
+        navigationItem.title = "MES系统"
 
         let back = UIBarButtonItem(
             image: UIImage(systemName: "chevron.left",
@@ -269,7 +269,7 @@ final class WebViewController: UIViewController {
         splash.backgroundColor = Theme.paper
         splash.translatesAutoresizingMaskIntoConstraints = false
 
-        let mark = Theme.label("业务系统", font: Theme.display(21), color: Theme.ink)
+        let mark = Theme.label("MES系统", font: Theme.display(21), color: Theme.ink)
         mark.textAlignment = .center
         let rule = UIView()
         rule.backgroundColor = Theme.accent
