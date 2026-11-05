@@ -66,7 +66,8 @@ def main():
     with open(os.path.join(ASSETS, "Contents.json"), "w") as f:
         json.dump(contents, f, indent=2)
 
-    master.save(os.path.join(os.path.dirname(ASSETS), "..", "..", "AppIcon-512.png"))
+    master.resize((512, 512), Image.LANCZOS).save(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(ASSETS))), "AppIcon-512.png"))
     print("icons ok ->", ASSETS)
 
 
