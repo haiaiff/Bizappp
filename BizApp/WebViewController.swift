@@ -36,6 +36,19 @@ final class WebViewController: UIViewController {
         set { UserDefaults.standard.set(newValue, forKey: WebViewController.centerPageKey) }
     }
 
+    /// 布局宽度：0 = 跟随设备；其他值 = 按该宽度排版（老系统固定像素布局的应急开关）
+    private static let layoutWidthKey = "bizapp.layoutWidth"
+
+    private var layoutWidth: Int {
+        get {
+            // 首次运行默认 980：老系统本来就是按桌面宽度设计的，按这个宽度排版再整体缩放，
+            // 页面是完整的；"自适应"留给用户自己切
+            if UserDefaults.standard.object(forKey: WebViewController.layoutWidthKey) == nil { return 980 }
+            return UserDefaults.standard.integer(forKey: WebViewController.layoutWidthKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: WebViewController.layoutWidthKey) }
+    }
+
     /// 网页缩放（1.0 = 100%）。老系统不改布局放不大小字，交给用户按页面自己调
     private static let pageZoomKey = "bizapp.pageZoom"
 
@@ -183,6 +196,19 @@ final class WebViewController: UIViewController {
         }
         let zoom = UIMenu(title: "页面缩放", image: UIImage(systemName: "textformat.size"), children: zoomActions)
 
+        let widths: [(Int, String)] = [(0, "自适应"), (768, "768"), (980, "980"), (1200, "1200")]
+        let widthActions = widths.map { pair -> UIAction in
+            let (w, title) = pair
+            return UIAction(title: title, state: layoutWidth == w ? .on : .off) { [weak self] _ in
+                guard let self = self else { return }
+                self.layoutWidth = w
+                self.applyInjection()
+                self.navigationItem.rightBarButtonItem?.menu = self.buildMenu()
+                self.reload()
+            }
+        }
+        let layout = UIMenu(title: "布局宽度", image: UIImage(systemName: "arrow.left.and.right"), children: widthActions)
+
         let diag = UIAction(title: "页面诊断", image: UIImage(systemName: "stethoscope")) { [weak self] _ in
             self?.showDiagnostics()
         }
@@ -194,7 +220,7 @@ final class WebViewController: UIViewController {
 
         return UIMenu(children: [
             reload, home, safari,
-            UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance, zoom]),
+            UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance, zoom, layout]),
             UIMenu(options: .displayInline, children: [resetZoom, diag]),
             UIMenu(options: .displayInline, children: [server])
         ])
@@ -223,7 +249,18 @@ final class WebViewController: UIViewController {
             baseFont:b?getComputedStyle(b).fontSize:'',
             injected:!!window.__bizappInjected,
             iframes:d.querySelectorAll('iframe').length,
-            bigBox: big?(big.tagName+' '+Math.round(big.getBoundingClientRect().width)+'px'):'-'
+            bigBox: big?(big.tagName+' '+Math.round(big.getBoundingClientRect().width)+'px'):'-',
+            widest: (function(){
+              var ns=d.getElementsByTagName('*'), out=[], i, r;
+              for(i=0;i<ns.length;i++){
+                r=ns[i].getBoundingClientRect();
+                if(r.width > w.innerWidth*1.15){
+                  out.push(ns[i].tagName+(ns[i].className?('.'+String(ns[i].className).split(' ')[0]):'')+'='+Math.round(r.width));
+                }
+                if(out.length>60){break;}
+              }
+              return out.slice(0,6).join(', ');
+            })()
           });
         })()
         """
@@ -294,6 +331,7 @@ final class WebViewController: UIViewController {
         let cc = controller ?? webView.configuration.userContentController
         cc.removeAllUserScripts()
         guard webDark || centerPage else { return }
+        WebInjection.layoutWidth = layoutWidth
         cc.addUserScript(WKUserScript(source: WebInjection.script(dark: webDark, fit: centerPage),
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: false))
@@ -636,8 +674,11 @@ private enum WebInjection {
     /// 业务页：内容目标宽度占屏幕比例
     static let mobileRatio: Double = 0.95
 
+    /// 布局宽度：0 = 跟随设备（device-width）；>0 = 强制按桌面宽度排版再整体缩放
+    static var layoutWidth: Int = 0
+
     static func script(dark: Bool, fit: Bool) -> String {
-        let flags = "{\"dark\": \(dark), \"fit\": \(fit)}"
+        let flags = "{\"dark\": \(dark), \"fit\": \(fit), \"layoutWidth\": \(layoutWidth)}"
         return #"""
         (function () {
           if (window.__bizappInjected) { return; }
@@ -700,9 +741,10 @@ private enum WebInjection {
               m.setAttribute('name', 'viewport');
               head.appendChild(m);
             }
+            var target = CFG.layoutWidth > 0 ? ('width=' + CFG.layoutWidth) : 'width=device-width';
             var c = m.getAttribute('content') || '';
-            if (!/width\s*=\s*device-width/i.test(c)) {
-              m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes');
+            if (c.indexOf(target) < 0) {
+              m.setAttribute('content', target + ', initial-scale=1, maximum-scale=5, user-scalable=yes');
             }
           }
 
