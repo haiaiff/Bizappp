@@ -552,7 +552,7 @@ private enum WebInjection {
     /// 内容目标宽度占屏幕比例
     static let widthRatio: Double = 0.77
     /// 内容顶部留白占屏幕比例
-    static let topRatio: Double = 0.18
+    static let topRatio: Double = 0.165
     /// 放大幅度上限，避免低分辨率页被拉糊
     static let maxZoom: Double = 1.7
 
