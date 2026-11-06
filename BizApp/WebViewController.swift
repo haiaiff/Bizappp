@@ -592,7 +592,7 @@ private enum WebInjection {
           // 宽表格改为整页横滑，而不是被裁掉。
           var MOBILE_CSS = [
             'html{-webkit-text-size-adjust:100% !important;overflow-x:auto !important}',
-            'body{-webkit-text-size-adjust:100% !important;overflow-x:auto !important;min-width:0 !important}',
+            'body{-webkit-text-size-adjust:100% !important;overflow-x:auto !important;min-width:0 !important;overflow-wrap:break-word !important;word-wrap:break-word !important}',
             'table{max-width:none !important}',
             'img{-webkit-user-drag:none}',
             'iframe,frame{max-width:100% !important}'
@@ -687,7 +687,9 @@ private enum WebInjection {
             body.style.setProperty('padding-top', Math.round(vh * TOP_RATIO / z) + 'px', 'important');
           }
 
-          // ── 业务页：viewport 换掉后让页面自己重排；仍窄的固定宽表单再温和放大 ──
+          // ── 业务页：viewport 换掉后让页面自己重排；仍窄的固定宽表单再放大 ──
+          // Opcenter 的工序页是这种结构：外层铺满，里面那张表固定 300px，
+          // 于是字不小、但内容挤在左半边。这时按"主容器有多窄"算放大倍数，直接铺到 94%。
           function fitMobile() {
             if (!CFG.fit || !document.body) { return; }
 
@@ -695,18 +697,35 @@ private enum WebInjection {
             html.style.zoom = '';
             body.style.removeProperty('padding-top');
 
-            var vw = window.innerWidth;
-            var vh = window.innerHeight;
-            var w = Math.max(body.scrollWidth || 0, html.scrollWidth || 0);
-            var h = Math.max(body.scrollHeight || 0, html.scrollHeight || 0);
+            var vw = window.innerWidth, vh = window.innerHeight;
+            var bodyH = Math.max(body.scrollHeight || 0, html.scrollHeight || 0);
+            if (bodyH > vh * 6) { return; }   // 超长表格页放大只会把内容推出屏
 
-            if (w < 120 || h < 80) { return; }
-            if (w >= vw * 0.9) { return; }   // 已经接近满宽，别再动
-            if (h > vh * 4) { return; }      // 长表格页放大只会把内容推出屏，保留字号
+            // 找最外层、面积最大、但没铺满屏的容器：跳过已经满宽的父级，也跳过按钮这种小元素
+            var best = null, bestArea = 0;
+            var nodes = body.getElementsByTagName('*');
+            var limit = Math.min(nodes.length, 1500);
+            for (var i = 0; i < limit; i++) {
+              var el = nodes[i], tag = el.tagName;
+              if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK' || tag === 'BR' ||
+                  tag === 'IFRAME' || tag === 'FRAME' || tag === 'IMG' || tag === 'INPUT' ||
+                  tag === 'BUTTON' || tag === 'SELECT') { continue; }
+              var r = el.getBoundingClientRect();
+              if (r.width < 140 || r.height < 60) { continue; }
+              if (r.width > vw * 0.97) { continue; }
+              var a = r.width * r.height;
+              if (a > bestArea) { bestArea = a; best = el; }
+            }
 
-            var z = vw * MOBILE_RATIO / w;
-            if (z > 1.6) { z = 1.6; }
-            if (z < 1.06) { return; }
+            var mw = best ? best.getBoundingClientRect().width
+                          : Math.max(body.scrollWidth || 0, html.scrollWidth || 0);
+
+            if (!mw || mw < 120) { return; }
+            if (mw >= vw * 0.9) { return; }   // 已经铺满，别动
+
+            var z = vw * 0.94 / mw;
+            if (z > 1.5) { z = 1.5; }
+            if (z < 1.08) { return; }         // 差一点点不值得放大
 
             html.style.zoom = z;
           }
@@ -753,7 +772,12 @@ private enum WebInjection {
             setTimeout(run, 300);
             setTimeout(run, 1000);
           });
-          window.addEventListener('resize', run);
+          // 滚动时 iOS 会反复触发 resize，防抖一下，别每次都遍历 DOM
+          var rzTimer = null;
+          window.addEventListener('resize', function () {
+            if (rzTimer) { clearTimeout(rzTimer); }
+            rzTimer = setTimeout(run, 220);
+          });
         })();
         """#
     }
