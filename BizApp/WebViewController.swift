@@ -135,9 +135,9 @@ final class WebViewController: UIViewController {
             self.reload()
         }
 
-        // 登录页居中：网页把登录框排在页面上部，下面留一大片空，居中后视觉才平衡
+        // 登录页适配：老系统按桌面排版，手机上内容被压到 0.38 倍，放大到占宽约 77% 并上移
         let centerAction = UIAction(
-            title: "登录页居中",
+            title: "登录页适配",
             image: UIImage(systemName: "rectangle.center.inset.filled"),
             state: centerPage ? .on : .off
         ) { [weak self] _ in
@@ -217,7 +217,7 @@ final class WebViewController: UIViewController {
         let cc = controller ?? webView.configuration.userContentController
         cc.removeAllUserScripts()
         guard webDark || centerPage else { return }
-        cc.addUserScript(WKUserScript(source: WebInjection.script(dark: webDark, center: centerPage),
+        cc.addUserScript(WKUserScript(source: WebInjection.script(dark: webDark, fit: centerPage),
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: true))
     }
@@ -542,19 +542,31 @@ extension WebViewController: WKDownloadDelegate {
 
 // MARK: - 网页注入
 
-/// 老系统没有 dark 样式，也没有为手机排过版，这里注入两层样式：
+/// 老系统是按桌面 980px 排版的，在手机上被压成 0.38 倍：字小、框窄、上下大片留白。
+/// 这里注入两层样式：
 /// 1) 「反色 + 色相回正」把白底页面压到石墨底，大图二次反色保留原色；
-/// 2) 内容短于屏幕时垂直居中，把登录页下方那片空白分到上下两侧。
+/// 2) 「小页面适配」——内容明显小于屏幕时等比放大到占宽约 77%，并把内容提到屏幕上方，
+///    对应设计目标：内容宽 77%、顶部留白 18%。
 private enum WebInjection {
 
-    static func script(dark: Bool, center: Bool) -> String {
-        let flags = "{\"dark\": \(dark), \"center\": \(center)}"
+    /// 内容目标宽度占屏幕比例
+    static let widthRatio: Double = 0.77
+    /// 内容顶部留白占屏幕比例
+    static let topRatio: Double = 0.18
+    /// 放大幅度上限，避免低分辨率页被拉糊
+    static let maxZoom: Double = 1.7
+
+    static func script(dark: Bool, fit: Bool) -> String {
+        let flags = "{\"dark\": \(dark), \"fit\": \(fit)}"
         return #"""
         (function () {
           if (window.__bizappInjected) { return; }
           window.__bizappInjected = true;
 
           var CFG = \#(flags);
+          var WIDTH_RATIO = \#(widthRatio);
+          var TOP_RATIO = \#(topRatio);
+          var MAX_ZOOM = \#(maxZoom);
 
           var DARK_CSS = [
             ':root{color-scheme:dark}',
@@ -562,9 +574,10 @@ private enum WebInjection {
             'img.__bizapp_keep,video,canvas,object,embed{filter:invert(1) hue-rotate(180deg) !important}'
           ].join('');
 
-          var CENTER_CSS = [
-            'html.__bz_center,html.__bz_center body{height:100% !important;min-height:100% !important}',
-            'html.__bz_center body{display:flex !important;flex-direction:column !important;justify-content:center !important}'
+          var FIT_CSS = [
+            ':root{overflow-x:hidden !important}',
+            'html.__bz_fit{overflow-x:hidden !important}',
+            'html.__bz_fit body{height:auto !important;min-height:0 !important;overflow-x:hidden !important}'
           ].join('');
 
           function styleSheet() {
@@ -573,7 +586,7 @@ private enum WebInjection {
               s = document.createElement('style');
               s.id = '__bizapp_style__';
             }
-            var css = (CFG.dark ? DARK_CSS : '') + (CFG.center ? CENTER_CSS : '');
+            var css = (CFG.dark ? DARK_CSS : '') + (CFG.fit ? FIT_CSS : '');
             if (s.textContent !== css) { s.textContent = css; }
             (document.head || document.documentElement).appendChild(s);
           }
@@ -590,41 +603,60 @@ private enum WebInjection {
             }
           }
 
-          // 只量内容本身的高度：body 自身可能被拉满屏，量它会永远"等于视口"
-          function contentHeight() {
+          // 量内容本身的尺寸：body 常被拉满屏，量它会永远"等于视口"
+          function measure() {
             var body = document.body;
-            if (!body) { return 0; }
-            var box = body.getBoundingClientRect();
-            var top = box.top, bottom = top, seen = false;
+            if (!body) { return null; }
+            var l = Infinity, t = Infinity, r = -Infinity, b = -Infinity, seen = false;
             for (var i = 0; i < body.children.length; i++) {
-              var r = body.children[i].getBoundingClientRect();
-              if (r.height < 1 && r.width < 1) { continue; }
-              top = seen ? Math.min(top, r.top) : r.top;
-              bottom = seen ? Math.max(bottom, r.bottom) : r.bottom;
+              var rc = body.children[i].getBoundingClientRect();
+              if (rc.width < 1 && rc.height < 1) { continue; }
+              l = Math.min(l, rc.left); t = Math.min(t, rc.top);
+              r = Math.max(r, rc.right); b = Math.max(b, rc.bottom);
               seen = true;
             }
-            return seen ? (bottom - top) : body.scrollHeight;
+            return seen ? { w: r - l, h: b - t } : null;
           }
 
-          function fitCenter() {
-            if (!CFG.center || !document.body) { return; }
-            var html = document.documentElement;
-            var vv = window.visualViewport;
-            var viewport = vv ? vv.height : window.innerHeight;
-            var content = contentHeight();
+          function reset() {
+            var html = document.documentElement, body = document.body;
+            html.classList.remove('__bz_fit');
+            html.style.zoom = '';
+            if (body) { body.style.removeProperty('padding-top'); }
+          }
 
-            // 0.86 是留白阈值：短于八成六屏才居中；长页面（列表、表单）原样保留，
-            // 否则 flex 居中会把超出部分顶到屏幕外，滚都滚不到。
-            if (content > 40 && content < viewport * 0.86) {
-              html.classList.add('__bz_center');
-            } else {
-              html.classList.remove('__bz_center');
-            }
+          function fitPage() {
+            if (!CFG.fit || !document.body) { return; }
+
+            var html = document.documentElement, body = document.body;
+            var vv = window.visualViewport;
+            var vh = vv ? vv.height : window.innerHeight;
+            var vw = vv ? vv.width : window.innerWidth;
+
+            // 键盘弹出时视口被压扁，此时重算会把页面缩回去。保持现状，让用户正常滚动。
+            if (vv && (window.innerHeight - vv.height) > 120) { return; }
+
+            reset();
+            var box = measure();
+            if (!box || box.w < 40 || box.h < 40) { return; }
+
+            // 长页面 / 满宽页面原样保留：放大会让表格横向溢出，反倒更难用
+            if (box.h >= vh * 0.86 || box.w > vw * 0.96) { return; }
+
+            var z = vw * WIDTH_RATIO / box.w;
+            if (z > MAX_ZOOM) { z = MAX_ZOOM; }
+            if (z < 1) { z = 1; }
+
+            html.classList.add('__bz_fit');
+            if (z > 1.01) { html.style.zoom = z; }
+
+            // padding 会随 zoom 一起放大，所以这里按 z 折算，保证视觉留白恒为屏幕的 18%
+            body.style.setProperty('padding-top', Math.round(vh * TOP_RATIO / z) + 'px', 'important');
           }
 
           function run() {
             styleSheet();
-            fitCenter();
+            fitPage();
             keepColor();
           }
 
@@ -635,11 +667,7 @@ private enum WebInjection {
             setTimeout(run, 300);
             setTimeout(run, 1000);
           });
-          // 键盘弹出会压缩视口，这时应当解除居中，让表单能正常滚动
-          if (window.visualViewport) {
-            window.visualViewport.addEventListener('resize', fitCenter);
-          }
-          window.addEventListener('resize', fitCenter);
+          window.addEventListener('resize', fitPage);
         })();
         """#
     }
