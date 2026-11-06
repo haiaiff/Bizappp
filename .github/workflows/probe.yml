@@ -1,7 +1,12 @@
 name: Probe
 on: workflow_dispatch
 jobs:
-  linux:
-    runs-on: ubuntu-latest
+  mac15:
+    runs-on: macos-15
     steps:
-      - run: echo "linux runner ok"
+      - run: sw_vers && xcodebuild -version
+  mac14:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - run: echo "macos-14 alive"
