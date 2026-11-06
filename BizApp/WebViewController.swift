@@ -62,6 +62,18 @@ final class WebViewController: UIViewController {
         set { UserDefaults.standard.set(newValue, forKey: WebViewController.layoutWidthKey) }
     }
 
+    private static let layoutVersionKey = "bizapp.layoutVersion"
+
+    /// 排版逻辑换代时重置一次开关：否则上一版留下的"手机排版=关"会让新逻辑看起来没生效
+    private func migrateLayoutSettings() {
+        let v = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1"
+        guard UserDefaults.standard.string(forKey: WebViewController.layoutVersionKey) != v else { return }
+        UserDefaults.standard.set(v, forKey: WebViewController.layoutVersionKey)
+        UserDefaults.standard.removeObject(forKey: WebViewController.autoFitKey)
+        UserDefaults.standard.removeObject(forKey: WebViewController.layoutWidthKey)
+        UserDefaults.standard.removeObject(forKey: WebViewController.pageZoomKey)
+    }
+
     /// 网页缩放（1.0 = 100%）。老系统不改布局放不大小字，交给用户按页面自己调
     private static let pageZoomKey = "bizapp.pageZoom"
 
@@ -95,6 +107,7 @@ final class WebViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        migrateLayoutSettings()
         view.backgroundColor = Theme.paper
         setupNavigation()
         setupWebView()
@@ -777,7 +790,9 @@ private enum WebInjection {
     static var autoFit: Bool = true
 
     static func script(dark: Bool, fit: Bool) -> String {
-        let flags = "{\"dark\": \(dark), \"fit\": \(fit), \"layoutWidth\": \(layoutWidth)}"
+        // autoFit 必须一起传：v2.0 漏了这项，JS 里 CFG.autoFit 是 undefined，
+        // reflowMobile() 一进门就 return，重排整段从未执行（页面被硬按 440 排版，比 v1.12 更糟）
+        let flags = "{\"dark\": \(dark), \"fit\": \(fit), \"layoutWidth\": \(layoutWidth), \"autoFit\": \(autoFit)}"
         return #"""
         (function () {
           if (window.__bizappInjected) { return; }
@@ -840,7 +855,10 @@ private enum WebInjection {
               m.setAttribute('name', 'viewport');
               head.appendChild(m);
             }
-            var target = CFG.layoutWidth > 0 ? ('width=' + CFG.layoutWidth) : 'width=device-width';
+            // 关掉「手机排版」时要能一键回到上一版：那时走的是桌面 980 排版再整体缩放，
+            // 所以 autoFit=false 且没指定宽度时，强制回 width=980（而不是 device-width）
+            var w = CFG.layoutWidth > 0 ? CFG.layoutWidth : (CFG.autoFit === false ? 980 : 0);
+            var target = w > 0 ? ('width=' + w) : 'width=device-width';
             var c = m.getAttribute('content') || '';
             if (c.indexOf(target) < 0) {
               m.setAttribute('content', target + ', initial-scale=1, maximum-scale=5, user-scalable=yes');
