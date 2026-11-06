@@ -183,11 +183,62 @@ final class WebViewController: UIViewController {
         }
         let zoom = UIMenu(title: "页面缩放", image: UIImage(systemName: "textformat.size"), children: zoomActions)
 
+        let diag = UIAction(title: "页面诊断", image: UIImage(systemName: "stethoscope")) { [weak self] _ in
+            self?.showDiagnostics()
+        }
+        let resetZoom = UIAction(title: "缩放重置为 100%", image: UIImage(systemName: "arrow.counterclockwise")) { [weak self] _ in
+            guard let self = self else { return }
+            self.pageZoom = 1.0
+            self.navigationItem.rightBarButtonItem?.menu = self.buildMenu()
+        }
+
         return UIMenu(children: [
             reload, home, safari,
             UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance, zoom]),
+            UIMenu(options: .displayInline, children: [resetZoom, diag]),
             UIMenu(options: .displayInline, children: [server])
         ])
+    }
+
+    /// 页面诊断：把视口、缩放、实际排版的真实数值读出来，避免再靠猜
+    private func showDiagnostics() {
+        let js = """
+        (function(){
+          var d=document, w=window, b=d.body;
+          var vp=d.querySelector('meta[name=viewport]');
+          var big=null, area=0;
+          if(b){ var ns=b.getElementsByTagName('*');
+            for(var i=0;i<Math.min(ns.length,800);i++){
+              var r=ns[i].getBoundingClientRect();
+              if(r.width<80||r.height<40){continue;}
+              var a=r.width*r.height; if(a>area){area=a;big=ns[i];}
+            } }
+          return JSON.stringify({
+            vw:w.innerWidth, vh:w.innerHeight, dpr:w.devicePixelRatio,
+            visualScale:(w.visualViewport||{}).scale,
+            cssZoom:d.documentElement.style.zoom||'(none)',
+            viewport:vp?vp.content:'(none)',
+            bodyW:b?b.scrollWidth:-1,
+            docW:d.documentElement.scrollWidth,
+            baseFont:b?getComputedStyle(b).fontSize:'',
+            injected:!!window.__bizappInjected,
+            iframes:d.querySelectorAll('iframe').length,
+            bigBox: big?(big.tagName+' '+Math.round(big.getBoundingClientRect().width)+'px'):'-'
+          });
+        })()
+        """
+        webView.evaluateJavaScript(js) { [weak self] result, error in
+            guard let self = self else { return }
+            var body = (result as? String) ?? "读取失败"
+            if let err = error { body = "读取失败：" + err.localizedDescription }
+            let text = "pageZoom=" + String(format: "%.2f", self.pageZoom) + "\n" + body
+            let alert = UIAlertController(title: "页面诊断", message: text, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "拷贝", style: .default) { _ in
+                UIPasteboard.general.string = text
+            })
+            alert.addAction(UIAlertAction(title: "好", style: .cancel))
+            self.present(alert, animated: true)
+        }
     }
 
     // MARK: - 视图构建
