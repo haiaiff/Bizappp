@@ -39,6 +39,20 @@ final class WebViewController: UIViewController {
     /// 布局宽度：0 = 跟随设备；其他值 = 按该宽度排版（老系统固定像素布局的应急开关）
     private static let layoutWidthKey = "bizapp.layoutWidth"
 
+    private static let autoFitKey = "bizapp.autoFit"
+
+    /// 窄内容自动铺满（带溢出自检）。默认开，出问题可以一键关掉
+    private var autoFit: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: WebViewController.autoFitKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: WebViewController.autoFitKey)
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: WebViewController.autoFitKey)
+            WebInjection.autoFit = newValue
+        }
+    }
+
     private var layoutWidth: Int {
         get {
             // 首次运行默认 980：老系统本来就是按桌面宽度设计的，按这个宽度排版再整体缩放，
@@ -209,6 +223,21 @@ final class WebViewController: UIViewController {
         }
         let layout = UIMenu(title: "布局宽度", image: UIImage(systemName: "arrow.left.and.right"), children: widthActions)
 
+        let fitAction = UIAction(
+            title: "内容铺满屏幕",
+            image: UIImage(systemName: "arrow.up.left.and.arrow.down.right"),
+            state: autoFit ? .on : .off
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.autoFit = !self.autoFit
+            self.applyInjection()
+            self.navigationItem.rightBarButtonItem?.menu = self.buildMenu()
+            self.reload()
+        }
+
+        let export = UIAction(title: "导出页面结构", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in
+            self?.exportStructure()
+        }
         let diag = UIAction(title: "页面诊断", image: UIImage(systemName: "stethoscope")) { [weak self] _ in
             self?.showDiagnostics()
         }
@@ -220,8 +249,8 @@ final class WebViewController: UIViewController {
 
         return UIMenu(children: [
             reload, home, safari,
-            UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance, zoom, layout]),
-            UIMenu(options: .displayInline, children: [resetZoom, diag]),
+            UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance, fitAction, zoom, layout]),
+            UIMenu(options: .displayInline, children: [resetZoom, diag, export]),
             UIMenu(options: .displayInline, children: [server])
         ])
     }
@@ -248,6 +277,8 @@ final class WebViewController: UIViewController {
             docW:d.documentElement.scrollWidth,
             baseFont:b?getComputedStyle(b).fontSize:'',
             injected:!!window.__bizappInjected,
+            contentW:window.__bz_contentW||0,
+            zoomApplied:window.__bz_zoom||1,
             iframes:d.querySelectorAll('iframe').length,
             bigBox: big?(big.tagName+' '+Math.round(big.getBoundingClientRect().width)+'px'):'-',
             widest: (function(){
@@ -275,6 +306,72 @@ final class WebViewController: UIViewController {
             })
             alert.addAction(UIAlertAction(title: "好", style: .cancel))
             self.present(alert, animated: true)
+        }
+    }
+
+    /// 导出当前页面的结构摘要：谁最宽、谁被裁、容器是什么样。
+    /// 只发结构不发数据，用来在不看真实 DOM 的情况下定位布局问题。
+    private func exportStructure() {
+        let js = #"""
+        (function(){
+          var d = document, w = window, b = d.body;
+          if (!b) { return "no body"; }
+          function tag(el) {
+            var t = el.tagName.toLowerCase();
+            if (el.id) { t += "#" + el.id; }
+            var c = String(el.className || "").split(/\s+/).filter(Boolean).slice(0, 2);
+            if (c.length) { t += "." + c.join("."); }
+            return t;
+          }
+          function txt(el) {
+            return String(el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 28);
+          }
+          var nodes = b.getElementsByTagName("*");
+          var n = Math.min(nodes.length, 2000);
+          var wide = [], clipped = [], boxes = [];
+          for (var i = 0; i < n; i++) {
+            var el = nodes[i], r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) { continue; }
+            var cs = w.getComputedStyle(el);
+            if (r.width > w.innerWidth * 1.02 && wide.length < 6) {
+              wide.push(tag(el) + " w=" + Math.round(r.width) + " " + txt(el));
+            }
+            var cw = el.clientWidth, sw = el.scrollWidth;
+            var hid = (cs.overflowX === "hidden" || cs.overflow === "hidden" || cs.whiteSpace === "nowrap");
+            if (hid && cw > 30 && sw > cw + 2 && clipped.length < 10) {
+              clipped.push(tag(el) + " cw=" + cw + " sw=" + sw + " ws=" + cs.whiteSpace + " | " + txt(el));
+            }
+            if (r.height > 50 && r.width < w.innerWidth * 0.99 && r.width > 150 && boxes.length < 8) {
+              boxes.push(tag(el) + " w=" + Math.round(r.width) + " h=" + Math.round(r.height));
+            }
+          }
+          boxes.sort(function(a, b){ return parseInt(b.split("w=")[1]) - parseInt(a.split("w=")[1]); });
+          var vp = d.querySelector('meta[name=viewport]');
+          var out = [
+            "url=" + location.pathname,
+            "vw=" + w.innerWidth + " vh=" + w.innerHeight + " dpr=" + w.devicePixelRatio,
+            "scale=" + ((w.visualViewport || {}).scale || "-"),
+            "viewport=" + (vp ? vp.content : "(none)"),
+            "bodyW=" + b.scrollWidth + " docW=" + d.documentElement.scrollWidth,
+            "zoom=" + (d.documentElement.style.zoom || "-"),
+            "injected=" + !!w.__bizappInjected + " appliedZoom=" + (w.__bz_zoom || 1) + " contentW=" + (w.__bz_contentW || 0),
+            "iframes=" + d.querySelectorAll("iframe").length,
+            "-- 最宽的溢出元素 --"
+          ].concat(wide.length ? wide : ["(无)"]);
+          out.push("-- 被裁剪的元素 --");
+          out = out.concat(clipped.length ? clipped : ["(无)"]);
+          out.push("-- 主要容器 --");
+          out = out.concat(boxes.slice(0, 8));
+          return out.join("\n");
+        })()
+        """#
+        webView.evaluateJavaScript(js) { [weak self] result, error in
+            guard let self = self else { return }
+            var text = (result as? String) ?? ""
+            if let err = error { text = "读取失败：" + err.localizedDescription + "\n" + text }
+            let vc = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+            vc.popoverPresentationController?.barButtonItem = self.navigationItem.rightBarButtonItem
+            self.present(vc, animated: true)
         }
     }
 
@@ -330,9 +427,10 @@ final class WebViewController: UIViewController {
     private func applyInjection(to controller: WKUserContentController? = nil) {
         let cc = controller ?? webView.configuration.userContentController
         cc.removeAllUserScripts()
-        guard webDark || centerPage else { return }
+        guard webDark || centerPage || autoFit else { return }
         WebInjection.layoutWidth = layoutWidth
-        cc.addUserScript(WKUserScript(source: WebInjection.script(dark: webDark, fit: centerPage),
+        WebInjection.autoFit = autoFit
+        cc.addUserScript(WKUserScript(source: WebInjection.script(dark: webDark, fit: centerPage || autoFit),
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: false))
     }
@@ -677,6 +775,9 @@ private enum WebInjection {
     /// 布局宽度：0 = 跟随设备（device-width）；>0 = 强制按桌面宽度排版再整体缩放
     static var layoutWidth: Int = 0
 
+    /// 是否把窄内容等比放大到铺满（带溢出自检，只放大不裁切）
+    static var autoFit: Bool = true
+
     static func script(dark: Bool, fit: Bool) -> String {
         let flags = "{\"dark\": \(dark), \"fit\": \(fit), \"layoutWidth\": \(layoutWidth)}"
         return #"""
@@ -808,43 +909,114 @@ private enum WebInjection {
             body.style.setProperty('padding-top', Math.round(vh * TOP_RATIO / z) + 'px', 'important');
           }
 
-          // ── 业务页：只重排 + 居中，不缩放 ──
-          // 放大试过两次，都是"按钮宽度不变、文字变大 → 裁字/重叠"，此路不通。
-          // 能安全做的只有一件事：内容比屏幕窄时让它左右居中，
-          // 把"贴左边、右边一大片黑"变成两边对称的留白。
-          function fitMobile() {
-            if (!document.body) { return; }
-
-            var html = document.documentElement, body = document.body;
-            if (html.style.zoom) { html.style.zoom = ''; }
-            if (body.style.paddingTop) { body.style.removeProperty('padding-top'); }
-
-            var olds = document.querySelectorAll('.__bz_center');
-            for (var k = 0; k < olds.length; k++) { olds[k].classList.remove('__bz_center'); }
-
-            if (!CFG.fit) { return; }
-
-            var vw = window.innerWidth;
-            var best = null, bestArea = 0;
+          // ── 业务页：先让被裁的文字显示完整，再把内容等比放大到刚好铺满 ──
+          // 背景（v1.13）：老系统按固定像素排版。980 视口整体缩放后，
+          // 工序页的内容容器只有 620px，落到手机上只占 62% 宽、字只有 4.9pt，
+          // 而且 Info 标准值、检查项名称、按钮都被容器裁掉一截。
+          //
+          // 两步：
+          //   1. unclip：找出"文字超出容器被藏起来"的块，改成换行显示（表格单元格外）。
+          //   2. fit：量出内容真实宽度，等比放大到刚好铺满视口；
+          //      放大后如果出现横向溢出就逐级回退，直到既不溢出又尽量大。
+          //      宁可少放大，绝不裁字 —— v1.8 的教训。
+          function contentWidth(vw) {
+            var body = document.body, best = 0;
+            if (!body) { return 0; }
             var nodes = body.getElementsByTagName('*');
-            var limit = Math.min(nodes.length, 1200);
+            var limit = Math.min(nodes.length, 1500);
             for (var i = 0; i < limit; i++) {
               var el = nodes[i], tag = el.tagName;
               if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK' || tag === 'BR' ||
-                  tag === 'IFRAME' || tag === 'FRAME' || tag === 'IMG' || tag === 'INPUT' ||
-                  tag === 'BUTTON' || tag === 'SELECT' || tag === 'TD' || tag === 'TR' ||
-                  tag === 'TBODY' || tag === 'THEAD') { continue; }
+                  tag === 'IFRAME' || tag === 'FRAME' || tag === 'IMG' ||
+                  tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT' ||
+                  tag === 'TD' || tag === 'TH' || tag === 'TR' ||
+                  tag === 'TBODY' || tag === 'THEAD' || tag === 'OPTION') { continue; }
               var cs = window.getComputedStyle(el);
-              if (cs.position === 'absolute' || cs.position === 'fixed' ||
-                  cs.display === 'inline' || cs.float !== 'none') { continue; }
+              if (cs.display === 'inline' || cs.position === 'fixed') { continue; }
               var r = el.getBoundingClientRect();
-              if (r.width < 140 || r.height < 60) { continue; }
-              if (r.width > vw * 0.88) { continue; }   // 已经够宽，不需要居中
-              var a = r.width * r.height;
-              if (a > bestArea) { bestArea = a; best = el; }
+              if (r.height < 40) { continue; }
+              // 比视口还宽的，是宽表格/宽画布，不参与"内容宽度"的统计
+              if (r.width > vw * 0.98) { continue; }
+              if (r.width > best) { best = r.width; }
             }
+            return best;
+          }
 
-            if (best) { best.classList.add('__bz_center'); }
+          function unclipText() {
+            var body = document.body;
+            if (!body) { return; }
+            var tags = ['div', 'h1', 'h2', 'h3', 'h4', 'p', 'span', 'label', 'b', 'strong'];
+            for (var t = 0; t < tags.length; t++) {
+              var nodes = body.getElementsByTagName(tags[t]);
+              var limit = Math.min(nodes.length, 700);
+              for (var i = 0; i < limit; i++) {
+                var el = nodes[i];
+                var cls = String(el.className || '');
+                if (cls.indexOf('__bz_') >= 0) { continue; }
+                if (!el.textContent || el.textContent.replace(/\s/g, '').length < 6) { continue; }
+
+                var cs = window.getComputedStyle(el);
+                if (cs.display === 'inline' || cs.position === 'fixed') { continue; }
+                var hiddenX = (cs.overflowX === 'hidden' || cs.overflowX === 'clip');
+                var nowrap = (cs.whiteSpace === 'nowrap');
+                if (!hiddenX && !nowrap) { continue; }
+
+                var cw = el.clientWidth, sw = el.scrollWidth;
+                if (cw < 40 || sw <= cw + 2) { continue; }
+                if (sw > cw * 2.2) { continue; }   // 装宽表格的容器，别碰
+
+                if (el.children.length === 0) {
+                  // 纯文本：允许换行，把被藏起来的部分露出来
+                  el.style.setProperty('white-space', 'normal', 'important');
+                  el.style.setProperty('overflow', 'visible', 'important');
+                  el.style.setProperty('text-overflow', 'clip', 'important');
+                  el.style.setProperty('word-break', 'break-word', 'important');
+                } else {
+                  // 装着按钮/控件的行：不能换行时给横向滑动，别让它撑破整页
+                  el.style.setProperty('overflow-x', 'auto', 'important');
+                  el.style.setProperty('overflow-y', 'hidden', 'important');
+                  el.style.setProperty('white-space', 'nowrap', 'important');
+                  el.style.setProperty('-webkit-overflow-scrolling', 'touch', 'important');
+                }
+              }
+            }
+          }
+
+          function fitMobile() {
+            var body = document.body;
+            if (!body) { return; }
+            var html = document.documentElement;
+
+            if (html.style.zoom) { html.style.zoom = ''; }
+            if (body.style.paddingTop) { body.style.removeProperty('padding-top'); }
+            window.__bz_zoom = 1;
+
+            if (!CFG.fit) { return; }
+
+            unclipText();
+            if (!CFG.autoFit) { return; }
+
+            var vw = html.clientWidth || window.innerWidth;
+            if (!vw) { return; }
+
+            var W = contentWidth(vw);
+            window.__bz_contentW = Math.round(W);
+            if (!W || W < 160) { return; }
+            if (W > vw * 0.9) { return; }          // 已经铺满，不动
+
+            var z = Math.min(vw / W, 2.0);
+            if (z < 1.08) { return; }              // 差一点点，不折腾
+
+            // 溢出自检：逐级回退，直到页面宽度不再超视口
+            var applied = 0;
+            while (z >= 1.08) {
+              html.style.zoom = z;
+              var sw = html.scrollWidth;
+              if (sw <= vw + 2) { applied = z; break; }
+              z -= 0.06;
+            }
+            if (!applied) { html.style.zoom = ''; }
+            window.__bz_zoom = applied ? Math.round(applied * 100) / 100 : 1;
           }
 
           // Opcenter 这类系统满屏 iframe / frameset，主文档 body 可能是空的，必须钻进去
