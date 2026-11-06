@@ -2,9 +2,9 @@
 
 ## ✅ 已构建好的安装包
 
-`MES系统-unsigned.ipa`（105 KB，v1.5，arm64，未签名）——由 GitHub Actions 的 macOS 机器实际编译产出，可直接拿去用你的企业证书重签。
+`MES系统-unsigned.ipa`（107 KB，v1.6，arm64，未签名）——由 GitHub Actions 的 macOS 机器实际编译产出，可直接拿去用你的企业证书重签。
 
-**当前版本：名称 MES系统，品牌图标，暗黑模式 + 登录页居中**，真机对照见 `对照-修复前后.png`、`对照-登录页居中.png`。
+**当前版本：名称 MES系统，品牌图标，暗黑模式 + 登录页等比放大**，真机对照见 `对照-修复前后.png`、`对照-登录页放大.png`。
 
 - 包名 `com.bizapp.web`，最低 iOS 15.0，iPhone only
 - 未签名（无 `_CodeSignature`），签名工具不会再报"已签名"冲突
@@ -229,6 +229,10 @@ git push -u origin main
 4. 拿这个 ipa 去签名
 
 免费账号额度：私有仓库每月 2000 分钟，macOS 按 10 倍计费（≈200 分钟真实时长），一次构建约 3 分钟，够用几十次。
+
+> 已踩过的坑：本账号下 `runs-on: macos-14` 的任务会在 3 秒内被判 `cancelled`（macOS 分钟数配额耗尽的表现），
+> 同一时刻 `ubuntu-latest` 与 `macos-15` 都能正常跑。所以 `.github/workflows/build-ipa.yml` 已固定为 **macos-15**，
+> 仓库也从私有改成了公开（公开仓库的标准 runner 不计费）。若哪天真机又跑不起来，先看这两处。
 
 ## 3. 路线 3：不装 App，用描述文件上主屏
 
