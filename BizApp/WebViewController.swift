@@ -36,6 +36,20 @@ final class WebViewController: UIViewController {
         set { UserDefaults.standard.set(newValue, forKey: WebViewController.centerPageKey) }
     }
 
+    /// 网页缩放（1.0 = 100%）。老系统不改布局放不大小字，交给用户按页面自己调
+    private static let pageZoomKey = "bizapp.pageZoom"
+
+    private var pageZoom: CGFloat {
+        get {
+            let v = UserDefaults.standard.double(forKey: WebViewController.pageZoomKey)
+            return v > 0 ? CGFloat(v) : 1.0
+        }
+        set {
+            UserDefaults.standard.set(Double(newValue), forKey: WebViewController.pageZoomKey)
+            webView?.pageZoom = newValue
+        }
+    }
+
     // MARK: - 视图
 
     private var webView: WKWebView!
@@ -157,9 +171,21 @@ final class WebViewController: UIViewController {
         }
         let appearance = UIMenu(title: "外观", image: UIImage(systemName: "moon"), children: appearanceActions)
 
+        // 自动缩放会把固定像素的老布局撑坏，改成手动：按当前页面试，满意就留着
+        let zoomLevels: [CGFloat] = [0.9, 1.0, 1.1, 1.25, 1.4]
+        let zoomActions = zoomLevels.map { level in
+            UIAction(title: "\(Int(level * 100))%",
+                     state: abs(pageZoom - level) < 0.01 ? .on : .off) { [weak self] _ in
+                guard let self = self else { return }
+                self.pageZoom = level
+                self.navigationItem.rightBarButtonItem?.menu = self.buildMenu()
+            }
+        }
+        let zoom = UIMenu(title: "页面缩放", image: UIImage(systemName: "textformat.size"), children: zoomActions)
+
         return UIMenu(children: [
             reload, home, safari,
-            UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance]),
+            UIMenu(options: .displayInline, children: [webDarkAction, centerAction, appearance, zoom]),
             UIMenu(options: .displayInline, children: [server])
         ])
     }
@@ -467,6 +493,7 @@ extension WebViewController: WKNavigationDelegate {
         progressTrack.isHidden = true
         updateBackButton()
         webView.scrollView.refreshControl?.endRefreshing()
+        webView.pageZoom = pageZoom
         revealSplash()
     }
 
@@ -687,47 +714,15 @@ private enum WebInjection {
             body.style.setProperty('padding-top', Math.round(vh * TOP_RATIO / z) + 'px', 'important');
           }
 
-          // ── 业务页：viewport 换掉后让页面自己重排；仍窄的固定宽表单再放大 ──
-          // Opcenter 的工序页是这种结构：外层铺满，里面那张表固定 300px，
-          // 于是字不小、但内容挤在左半边。这时按"主容器有多窄"算放大倍数，直接铺到 94%。
+          // ── 业务页：只重排，不缩放 ──
+          // 试过按容器宽度整体放大：固定像素宽的按钮不跟着变宽，文字却变大，
+          // 结果字被裁、控件叠在一起，比不放大更糟。老系统的布局不是流式的，
+          // 缩放治不了它的病，只会把毛病一起放大。要放大交给用户在菜单里手动选。
           function fitMobile() {
-            if (!CFG.fit || !document.body) { return; }
-
+            if (!document.body) { return; }
             var html = document.documentElement, body = document.body;
-            html.style.zoom = '';
-            body.style.removeProperty('padding-top');
-
-            var vw = window.innerWidth, vh = window.innerHeight;
-            var bodyH = Math.max(body.scrollHeight || 0, html.scrollHeight || 0);
-            if (bodyH > vh * 6) { return; }   // 超长表格页放大只会把内容推出屏
-
-            // 找最外层、面积最大、但没铺满屏的容器：跳过已经满宽的父级，也跳过按钮这种小元素
-            var best = null, bestArea = 0;
-            var nodes = body.getElementsByTagName('*');
-            var limit = Math.min(nodes.length, 1500);
-            for (var i = 0; i < limit; i++) {
-              var el = nodes[i], tag = el.tagName;
-              if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK' || tag === 'BR' ||
-                  tag === 'IFRAME' || tag === 'FRAME' || tag === 'IMG' || tag === 'INPUT' ||
-                  tag === 'BUTTON' || tag === 'SELECT') { continue; }
-              var r = el.getBoundingClientRect();
-              if (r.width < 140 || r.height < 60) { continue; }
-              if (r.width > vw * 0.97) { continue; }
-              var a = r.width * r.height;
-              if (a > bestArea) { bestArea = a; best = el; }
-            }
-
-            var mw = best ? best.getBoundingClientRect().width
-                          : Math.max(body.scrollWidth || 0, html.scrollWidth || 0);
-
-            if (!mw || mw < 120) { return; }
-            if (mw >= vw * 0.9) { return; }   // 已经铺满，别动
-
-            var z = vw * 0.94 / mw;
-            if (z > 1.5) { z = 1.5; }
-            if (z < 1.08) { return; }         // 差一点点不值得放大
-
-            html.style.zoom = z;
+            if (html.style.zoom) { html.style.zoom = ''; }
+            if (body.style.paddingTop) { body.style.removeProperty('padding-top'); }
           }
 
           // Opcenter 这类系统满屏 iframe / frameset，主文档 body 可能是空的，必须钻进去
