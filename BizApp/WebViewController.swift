@@ -219,7 +219,7 @@ final class WebViewController: UIViewController {
         guard webDark || centerPage else { return }
         cc.addUserScript(WKUserScript(source: WebInjection.script(dark: webDark, fit: centerPage),
                                       injectionTime: .atDocumentStart,
-                                      forMainFrameOnly: true))
+                                      forMainFrameOnly: false))
     }
 
     /// 贴顶的 2pt 细进度线，比系统进度条更克制
@@ -549,12 +549,14 @@ extension WebViewController: WKDownloadDelegate {
 ///    对应设计目标：内容宽 77%、顶部留白 18%。
 private enum WebInjection {
 
-    /// 内容目标宽度占屏幕比例
+    /// 登录页：内容目标宽度占屏幕比例
     static let widthRatio: Double = 0.77
-    /// 内容顶部留白占屏幕比例
+    /// 登录页：内容顶部留白占屏幕比例
     static let topRatio: Double = 0.165
-    /// 放大幅度上限，避免低分辨率页被拉糊
+    /// 登录页：放大幅度上限，避免低分辨率页被拉糊
     static let maxZoom: Double = 1.7
+    /// 业务页：内容目标宽度占屏幕比例
+    static let mobileRatio: Double = 0.95
 
     static func script(dark: Bool, fit: Bool) -> String {
         let flags = "{\"dark\": \(dark), \"fit\": \(fit)}"
@@ -567,6 +569,11 @@ private enum WebInjection {
           var WIDTH_RATIO = \#(widthRatio);
           var TOP_RATIO = \#(topRatio);
           var MAX_ZOOM = \#(maxZoom);
+          var MOBILE_RATIO = \#(mobileRatio);
+
+          // 登录页要"放大 + 上移"；业务页是另一套问题（桌面 980 视口被压扁），不能混着来
+          var path = (location.pathname || '') + (location.search || '');
+          var IS_LOGIN = /login/i.test(path);
 
           var DARK_CSS = [
             ':root{color-scheme:dark}',
@@ -574,21 +581,50 @@ private enum WebInjection {
             'img.__bizapp_keep,video,canvas,object,embed{filter:invert(1) hue-rotate(180deg) !important}'
           ].join('');
 
-          var FIT_CSS = [
+          var LOGIN_CSS = [
             ':root{overflow-x:hidden !important}',
             'html.__bz_fit{overflow-x:hidden !important}',
             'html.__bz_fit body{height:auto !important;min-height:0 !important;overflow-x:hidden !important}'
           ].join('');
 
-          function styleSheet() {
-            var s = document.getElementById('__bizapp_style__');
+          // 业务页：老 ASP.NET 页面没有 viewport 声明，iOS 按 980px 排版再缩到 0.4 倍，
+          // 于是字小、右边还空一大块。改成 device-width 让浏览器按真机宽度重排，
+          // 宽表格改为整页横滑，而不是被裁掉。
+          var MOBILE_CSS = [
+            'html{-webkit-text-size-adjust:100% !important;overflow-x:auto !important}',
+            'body{-webkit-text-size-adjust:100% !important;overflow-x:auto !important;min-width:0 !important}',
+            'table{max-width:none !important}',
+            'img{-webkit-user-drag:none}',
+            'iframe,frame{max-width:100% !important}'
+          ].join('');
+
+          function sheet(doc, css) {
+            var root = doc.head || doc.documentElement;
+            if (!root) { return false; }
+            var s = doc.getElementById('__bizapp_style__');
             if (!s) {
-              s = document.createElement('style');
+              s = doc.createElement('style');
               s.id = '__bizapp_style__';
+              root.appendChild(s);
             }
-            var css = (CFG.dark ? DARK_CSS : '') + (CFG.fit ? FIT_CSS : '');
             if (s.textContent !== css) { s.textContent = css; }
-            (document.head || document.documentElement).appendChild(s);
+            return true;
+          }
+
+          // 业务页专用：把 980 的虚拟视口改回真机宽度（改了才会重排，光调 zoom 是治标）
+          function ensureViewport() {
+            var head = document.head || document.documentElement;
+            if (!head) { return; }
+            var m = document.querySelector('meta[name="viewport"]');
+            if (!m) {
+              m = document.createElement('meta');
+              m.setAttribute('name', 'viewport');
+              head.appendChild(m);
+            }
+            var c = m.getAttribute('content') || '';
+            if (!/width\s*=\s*device-width/i.test(c)) {
+              m.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes');
+            }
           }
 
           function keepColor() {
@@ -618,14 +654,8 @@ private enum WebInjection {
             return seen ? { w: r - l, h: b - t } : null;
           }
 
-          function reset() {
-            var html = document.documentElement, body = document.body;
-            html.classList.remove('__bz_fit');
-            html.style.zoom = '';
-            if (body) { body.style.removeProperty('padding-top'); }
-          }
-
-          function fitPage() {
+          // ── 登录页：等比放大到占宽 77%，再顶到屏幕上方 18% ──
+          function fitLogin() {
             if (!CFG.fit || !document.body) { return; }
 
             var html = document.documentElement, body = document.body;
@@ -636,7 +666,10 @@ private enum WebInjection {
             // 键盘弹出时视口被压扁，此时重算会把页面缩回去。保持现状，让用户正常滚动。
             if (vv && (window.innerHeight - vv.height) > 120) { return; }
 
-            reset();
+            html.classList.remove('__bz_fit');
+            html.style.zoom = '';
+            body.style.removeProperty('padding-top');
+
             var box = measure();
             if (!box || box.w < 40 || box.h < 40) { return; }
 
@@ -654,20 +687,73 @@ private enum WebInjection {
             body.style.setProperty('padding-top', Math.round(vh * TOP_RATIO / z) + 'px', 'important');
           }
 
+          // ── 业务页：viewport 换掉后让页面自己重排；仍窄的固定宽表单再温和放大 ──
+          function fitMobile() {
+            if (!CFG.fit || !document.body) { return; }
+
+            var html = document.documentElement, body = document.body;
+            html.style.zoom = '';
+            body.style.removeProperty('padding-top');
+
+            var vw = window.innerWidth;
+            var vh = window.innerHeight;
+            var w = Math.max(body.scrollWidth || 0, html.scrollWidth || 0);
+            var h = Math.max(body.scrollHeight || 0, html.scrollHeight || 0);
+
+            if (w < 120 || h < 80) { return; }
+            if (w >= vw * 0.9) { return; }   // 已经接近满宽，别再动
+            if (h > vh * 4) { return; }      // 长表格页放大只会把内容推出屏，保留字号
+
+            var z = vw * MOBILE_RATIO / w;
+            if (z > 1.6) { z = 1.6; }
+            if (z < 1.06) { return; }
+
+            html.style.zoom = z;
+          }
+
+          // Opcenter 这类系统满屏 iframe / frameset，主文档 body 可能是空的，必须钻进去
+          function deepInject(doc, depth) {
+            if (depth > 3) { return; }
+            var nodes;
+            try { nodes = doc.querySelectorAll('iframe,frame'); } catch (e) { return; }
+            for (var i = 0; i < nodes.length; i++) {
+              var idoc = null;
+              try { idoc = nodes[i].contentDocument; } catch (e) { idoc = null; }
+              if (!idoc || !idoc.documentElement) { continue; }   // 跨域就交给 WKUserScript
+              try {
+                sheet(idoc, CFG.dark ? DARK_CSS + MOBILE_CSS : MOBILE_CSS);
+                idoc.documentElement.style.overflowX = 'auto';
+                if (idoc.body) { idoc.body.style.overflowX = 'auto'; }
+              } catch (e) {}
+              deepInject(idoc, depth + 1);
+            }
+          }
+
           function run() {
-            styleSheet();
-            fitPage();
+            try { body_of_run(); } catch (e) {}
+          }
+
+          function body_of_run() {
+            if (IS_LOGIN) {
+              sheet(document, (CFG.dark ? DARK_CSS : '') + (CFG.fit ? LOGIN_CSS : ''));
+              fitLogin();
+            } else {
+              ensureViewport();
+              sheet(document, (CFG.dark ? DARK_CSS : '') + (CFG.fit ? MOBILE_CSS : ''));
+              fitMobile();
+              deepInject(document, 1);
+            }
             keepColor();
           }
 
-          run();
           document.addEventListener('DOMContentLoaded', run);
+          run();
           window.addEventListener('load', function () {
             run();
             setTimeout(run, 300);
             setTimeout(run, 1000);
           });
-          window.addEventListener('resize', fitPage);
+          window.addEventListener('resize', run);
         })();
         """#
     }
