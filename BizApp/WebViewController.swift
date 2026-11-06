@@ -622,7 +622,8 @@ private enum WebInjection {
             'body{-webkit-text-size-adjust:100% !important;overflow-x:auto !important;min-width:0 !important;overflow-wrap:break-word !important;word-wrap:break-word !important}',
             'table{max-width:none !important}',
             'img{-webkit-user-drag:none}',
-            'iframe,frame{max-width:100% !important}'
+            'iframe,frame{max-width:100% !important}',
+            '.__bz_center{margin-left:auto !important;margin-right:auto !important}'
           ].join('');
 
           function sheet(doc, css) {
@@ -714,15 +715,43 @@ private enum WebInjection {
             body.style.setProperty('padding-top', Math.round(vh * TOP_RATIO / z) + 'px', 'important');
           }
 
-          // ── 业务页：只重排，不缩放 ──
-          // 试过按容器宽度整体放大：固定像素宽的按钮不跟着变宽，文字却变大，
-          // 结果字被裁、控件叠在一起，比不放大更糟。老系统的布局不是流式的，
-          // 缩放治不了它的病，只会把毛病一起放大。要放大交给用户在菜单里手动选。
+          // ── 业务页：只重排 + 居中，不缩放 ──
+          // 放大试过两次，都是"按钮宽度不变、文字变大 → 裁字/重叠"，此路不通。
+          // 能安全做的只有一件事：内容比屏幕窄时让它左右居中，
+          // 把"贴左边、右边一大片黑"变成两边对称的留白。
           function fitMobile() {
             if (!document.body) { return; }
+
             var html = document.documentElement, body = document.body;
             if (html.style.zoom) { html.style.zoom = ''; }
             if (body.style.paddingTop) { body.style.removeProperty('padding-top'); }
+
+            var olds = document.querySelectorAll('.__bz_center');
+            for (var k = 0; k < olds.length; k++) { olds[k].classList.remove('__bz_center'); }
+
+            if (!CFG.fit) { return; }
+
+            var vw = window.innerWidth;
+            var best = null, bestArea = 0;
+            var nodes = body.getElementsByTagName('*');
+            var limit = Math.min(nodes.length, 1200);
+            for (var i = 0; i < limit; i++) {
+              var el = nodes[i], tag = el.tagName;
+              if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'LINK' || tag === 'BR' ||
+                  tag === 'IFRAME' || tag === 'FRAME' || tag === 'IMG' || tag === 'INPUT' ||
+                  tag === 'BUTTON' || tag === 'SELECT' || tag === 'TD' || tag === 'TR' ||
+                  tag === 'TBODY' || tag === 'THEAD') { continue; }
+              var cs = window.getComputedStyle(el);
+              if (cs.position === 'absolute' || cs.position === 'fixed' ||
+                  cs.display === 'inline' || cs.float !== 'none') { continue; }
+              var r = el.getBoundingClientRect();
+              if (r.width < 140 || r.height < 60) { continue; }
+              if (r.width > vw * 0.88) { continue; }   // 已经够宽，不需要居中
+              var a = r.width * r.height;
+              if (a > bestArea) { bestArea = a; best = el; }
+            }
+
+            if (best) { best.classList.add('__bz_center'); }
           }
 
           // Opcenter 这类系统满屏 iframe / frameset，主文档 body 可能是空的，必须钻进去
