@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     # GitHub 免费提供的 macOS 机器，自带 Xcode
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 20
 
     steps:
